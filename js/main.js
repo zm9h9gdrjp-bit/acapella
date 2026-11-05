@@ -77,10 +77,16 @@ const app = {
     this.saveSoon();
     timeline.invalidate();
   },
+  loopChanged() {
+    this.saveSoon();
+    if (loopDialogOpen()) syncLoopDialog();
+    restartIfPlaying();
+  },
 };
 
 const timeline = new Timeline({
-  scroller: $('scroller'), spacer: $('spacer'), ruler: $('rulerCanvas'), lanes: $('lanesCanvas'), app,
+  scroller: $('scroller'), spacer: $('spacer'), ruler: $('rulerCanvas'), lanes: $('lanesCanvas'),
+  headersViewport: $('headersViewport'), app,
 });
 
 // ---------- toast ----------
@@ -143,9 +149,8 @@ function renderTransport() {
   $('btnMetronome').setAttribute('aria-pressed', String(p.metronome));
   $('btnLoop').setAttribute('aria-pressed', String(p.loop.enabled));
   $('btnSnap').setAttribute('aria-pressed', String(p.snap));
-  $('loopLabel').textContent = p.loop.enabled
-    ? (p.loop.endBar - p.loop.startBar === 1 ? `Bar ${p.loop.startBar}` : `Bars ${p.loop.startBar}–${p.loop.endBar - 1}`)
-    : '';
+  $('loopLabel').textContent = p.loop.endBar - p.loop.startBar === 1 ? `Bar ${p.loop.startBar}` : `Bars ${p.loop.startBar}–${p.loop.endBar - 1}`;
+  $('loopLabel').disabled = app.recording;
   const dots = $('beatDots');
   if (dots.children.length !== p.beatsPerBar) {
     dots.innerHTML = '';
@@ -378,6 +383,7 @@ async function saveTake(projectId, samples, info) {
   app.selectedTrackId = tr.id;
   renderHeaders();
   app.selectTrack(tr.id);
+  timeline.scrollToRow(p.tracks.length - 1);
   await app.saveNow();
   toast(`${tr.name} saved.`);
 }
@@ -451,7 +457,7 @@ $('metVol').addEventListener('input', (e) => {
 $('btnLoop').addEventListener('click', () => {
   if (app.recording) return;
   app.project.loop.enabled = !app.project.loop.enabled;
-  if (app.project.loop.enabled) toast('Loop on. Drag across the bar numbers to pick the bars. REC records one pass.', false, 4500);
+  if (app.project.loop.enabled) toast('Loop on. Drag the yellow bar\u2019s ends to change the bars. REC records one pass.', false, 4000);
   app.saveSoon(); renderTransport(); timeline.invalidate(); restartIfPlaying();
 });
 $('btnSnap').addEventListener('click', () => { app.project.snap = !app.project.snap; app.saveSoon(); renderTransport(); });
@@ -477,6 +483,91 @@ app.engine.onLevel = (peak) => {
   const pct = Math.max(0, Math.min(100, (db + 60) / 60 * 100));
   $('meterFill').style.height = pct + '%';
 };
+
+// ---------- loop dialog (bar steppers) ----------
+function loopDialogOpen() { return $('loopDialog').open; }
+function syncLoopDialog() {
+  const l = app.project.loop;
+  $('loopOn').checked = l.enabled;
+  $('loopFrom').textContent = l.startBar;
+  $('loopTo').textContent = l.endBar - 1;
+  const n = l.endBar - l.startBar;
+  $('loopLen').textContent = `${n} bar${n === 1 ? '' : 's'}`;
+}
+$('loopLabel').addEventListener('click', () => { if (app.recording) return; syncLoopDialog(); $('loopDialog').showModal(); });
+$('loopOn').addEventListener('change', (e) => {
+  app.project.loop.enabled = e.target.checked;
+  renderTransport(); timeline.invalidate(); app.loopChanged();
+});
+document.querySelectorAll('#loopDialog [data-step]').forEach(b => b.addEventListener('click', () => {
+  const l = app.project.loop, d = +b.dataset.d;
+  let s = l.startBar, en = l.endBar;
+  if (b.dataset.step === 'start') s = Math.max(1, Math.min(en - 1, s + d));
+  else en = Math.max(s + 1, en + d);
+  app.setLoop(s, en, true);
+  app.loopChanged();
+}));
+document.querySelectorAll('#loopDialog [data-len]').forEach(b => b.addEventListener('click', () => {
+  const p = app.project, barDur = 60 / p.bpm * p.beatsPerBar;
+  const start = Math.floor(app.playhead / barDur + 1e-6) + 1;
+  app.setLoop(start, start + +b.dataset.len, true);
+  app.loopChanged();
+}));
+
+// ---------- splitter: resize the layers window by folding the controls ----------
+(() => {
+  const fold = $('controlsFold'), handle = $('splitter');
+  const KEY = 'overdub.fold';
+  const natural = () => fold.scrollHeight;
+  let open = 1; // 0 = controls folded away (biggest layers window), 1 = all controls showing
+  try { const v = parseFloat(localStorage.getItem(KEY)); if (v >= 0 && v <= 1) open = v; } catch { /* */ }
+  const apply = () => {
+    // fully open = no cap at all, so late-loading fonts can't clip the last row
+    fold.style.maxHeight = open >= 0.999 ? 'none' : Math.round(natural() * open) + 'px';
+    fold.style.marginTop = open < 0.05 ? '0px' : '';
+    fold.inert = open < 0.05;
+    timeline.invalidate();
+  };
+  const save = () => { try { localStorage.setItem(KEY, String(open)); } catch { /* */ } };
+  let drag = null;
+  handle.addEventListener('pointerdown', (e) => {
+    handle.setPointerCapture(e.pointerId);
+    if (fold.style.maxHeight === 'none') fold.style.maxHeight = natural() + 'px';
+    drag = { y: e.clientY, open0: open, moved: false };
+    handle.classList.add('dragging');
+  });
+  handle.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dy = e.clientY - drag.y;
+    if (Math.abs(dy) > 4) drag.moved = true;
+    if (!drag.moved) return;
+    open = Math.max(0, Math.min(1, drag.open0 + dy / Math.max(40, natural())));
+    apply();
+  });
+  const end = () => {
+    if (!drag) return;
+    handle.classList.remove('dragging');
+    fold.classList.add('folding');
+    if (fold.style.maxHeight === 'none') { fold.style.maxHeight = natural() + 'px'; void fold.offsetHeight; }
+    if (!drag.moved) open = open > 0.5 ? 0 : 1;      // tap = fold / unfold
+    else {
+      // settle on a whole row of controls, never half a row
+      const cur = natural() * open;
+      const stops = new Set([0, natural()]);
+      for (const c of fold.children) stops.add(Math.round(c.offsetTop + c.offsetHeight + 6));
+      let best = 0;
+      for (const st of stops) if (Math.abs(st - cur) < Math.abs(best - cur)) best = st;
+      open = Math.min(1, best / natural());
+    }
+    apply(); save();
+    setTimeout(() => { fold.classList.remove('folding'); apply(); }, 250);
+    drag = null;
+  };
+  handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end);
+  window.addEventListener('resize', apply);
+  requestAnimationFrame(apply);
+})();
 
 // ---------- track dialog ----------
 let dlgTrack = null;
@@ -850,3 +941,4 @@ boot();
 // for debugging and tests
 app.render = renderAll;
 window.__app = app;
+window.__tl = timeline;

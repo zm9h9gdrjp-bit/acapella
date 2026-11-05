@@ -72,7 +72,7 @@
       <div class="meter" title="Microphone level"><div id="meterFill"></div></div>
     </div>
 
-    <div class="transport-controls">
+    <div class="transport-controls" id="controlsFold">
       <div class="ctl tempo">
         <label for="bpm">Tempo</label>
         <div class="stepper">
@@ -99,9 +99,9 @@
         <select id="countIn"><option value="0">Off</option><option value="1">1 bar</option><option value="2">2 bars</option></select>
       </div>
       <div class="ctl">
-        <button class="toggle" id="btnLoop" aria-pressed="false" title="Loop a section. Drag on the bar numbers to choose bars."><i class="led"></i>Loop
+        <button class="toggle" id="btnLoop" aria-pressed="false" title="Loop a section (L)"><i class="led"></i>Loop
         </button>
-        <span id="loopLabel" class="muted small"></span>
+        <button class="btn sm loop-bars" id="loopLabel" title="Choose which bars loop">Bars 1–4</button>
       </div>
       <div class="ctl">
         <button class="toggle" id="btnSnap" aria-pressed="true" title="Snap clip edits to the beat"><i class="led"></i>Snap</button>
@@ -114,26 +114,26 @@
     </div>
   </section>
 
-  <main class="workspace">
-    <div class="track-headers">
-      <div class="ruler-corner"><span class="muted small" id="trackCount">0 layers</span></div>
-      <div id="trackHeaders"></div>
+  <div class="splitter" id="splitter" role="separator" aria-orientation="horizontal" aria-label="Resize the layers window" title="Drag to resize the layers. Tap to fold the controls."><span></span></div>
+
+  <main class="layers" id="layersPanel">
+    <div class="corner">
+      <span class="corner-loop">Loop</span>
+      <span class="corner-count" id="trackCount">0 layers</span>
     </div>
+    <div class="ruler-wrap"><canvas id="rulerCanvas"></canvas></div>
+    <div class="headers-viewport" id="headersViewport"><div id="trackHeaders"></div></div>
     <div class="scroller" id="scroller">
       <div class="spacer" id="spacer">
-        <div class="canvases">
-          <canvas id="rulerCanvas"></canvas>
-          <canvas id="lanesCanvas"></canvas>
-        </div>
+        <div class="canvases"><canvas id="lanesCanvas"></canvas></div>
       </div>
     </div>
+    <div class="empty" id="emptyState">
+      <h2>Nothing on tape yet</h2>
+      <p>Headphones on. The click plays in your ears only, so it never ends up in a take.</p>
+      <p>Set a tempo, press <kbd>REC</kbd>, sing after the count-in, press <kbd>REC</kbd> again to stop. The next take goes on top.</p>
+    </div>
   </main>
-
-  <div class="empty" id="emptyState">
-    <h2>Nothing on tape yet</h2>
-    <p>Headphones on. The click plays in your ears only, so it never ends up in a take.</p>
-    <p>Set a tempo, press <kbd>REC</kbd>, sing after the count-in, press <kbd>REC</kbd> again to stop. The next take goes on top.</p>
-  </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
@@ -171,6 +171,38 @@
         <button type="button" class="btn" id="tdDuplicate">Duplicate</button>
         <button class="btn primary" value="close">Done</button>
       </footer>
+    </form>
+  </dialog>
+
+  <!-- Loop bars -->
+  <dialog id="loopDialog">
+    <form method="dialog" class="dlg">
+      <header><h3>Loop</h3><button class="btn ghost" value="close">Close</button></header>
+      <div class="dlg-body">
+        <label class="check"><input type="checkbox" id="loopOn"> Loop is on</label>
+        <div class="row stepper-row"><label>From bar</label>
+          <button type="button" class="btn sm" data-step="start" data-d="-1" aria-label="Earlier start">−</button>
+          <output id="loopFrom" class="big-num">1</output>
+          <button type="button" class="btn sm" data-step="start" data-d="1" aria-label="Later start">+</button>
+        </div>
+        <div class="row stepper-row"><label>To bar</label>
+          <button type="button" class="btn sm" data-step="end" data-d="-1" aria-label="Earlier end">−</button>
+          <output id="loopTo" class="big-num">4</output>
+          <button type="button" class="btn sm" data-step="end" data-d="1" aria-label="Later end">+</button>
+          <span class="muted small" id="loopLen"></span>
+        </div>
+        <div class="quick">
+          <span class="caps-label">From the playhead</span>
+          <div class="quick-btns">
+            <button type="button" class="btn" data-len="1">1 bar</button>
+            <button type="button" class="btn" data-len="2">2 bars</button>
+            <button type="button" class="btn" data-len="4">4 bars</button>
+            <button type="button" class="btn" data-len="8">8 bars</button>
+          </div>
+        </div>
+        <p class="muted small">You can also drag the yellow loop bar above the bar numbers: grab an end to resize it, the middle to move it.</p>
+      </div>
+      <footer><button class="btn primary" value="close">Done</button></footer>
     </form>
   </dialog>
 

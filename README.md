@@ -10,7 +10,8 @@ Everything stays **on your device** (in the browser's IndexedDB). There are no a
 - **Metronome / click.** It goes straight to your headphones and is never recorded or exported. You can set its volume, use a 1–2 bar count-in, and see a live **bar · beat** counter with beat dots.
 - **Tempo and time signature.** Set the BPM with ±, by typing, or with **Tap** tempo. Time signatures from 2/4 to 7/8.
 - **Timeline with bars and beats.** Tap to move the playhead, drag clips to move them, and drag clip edges to trim. **Snap** locks edits to the beat. Use Zoom ± (or Ctrl/⌘ + scroll).
-- **Loop a section.** Drag across the bar numbers to pick bars, then turn on **Loop**. Playback repeats them. Recording in loop mode punch-records exactly one pass.
+- **Loop a section.** Turn on **LOOP**, then drag the yellow loop bar above the bar numbers: drag an end to resize it, or the middle to move it. Or tap **Bars 1–4** to set *From bar / To bar* with −/+ buttons, or to loop 1, 2, 4 or 8 bars from the playhead. Tapping the bar numbers only moves the playhead. Recording in loop mode punch-records exactly one pass.
+- **Layers window.** Only the layers scroll. Drag the handle under the controls to make the layers window bigger or smaller; tap it to fold the controls away.
 - **Auto-tune (per layer).** Pick a key and scale (major, minor or chromatic) and a **Speed** from *Natural* to *Robotic*, plus an **Amount**. It runs on-device: YIN pitch detection plus PSOLA pitch shifting in a Web Worker. The original take is always kept, so you can switch auto-tune on and off to compare.
 - **Reverb.** A shared room reverb with a per-layer send amount.
 - **Reference / backing track.** **Import** an MP3 or WAV to sing along with. It's left out of exports unless you include it.
