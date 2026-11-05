@@ -1,5 +1,6 @@
 // Canvas timeline: ruler with bars/beats + loop region, track lanes with waveforms,
 // clip move/trim by dragging, playhead.
+import { displayColor } from './theme.js';
 
 export const ROW_H = 76;
 export const RULER_H = 40;
@@ -143,10 +144,17 @@ export class Timeline {
           g.fillText(String(b + 1), x + 4, 6);
         }
         if (spb * this.pps >= 10) {
-          g.fillStyle = col('--grid-beat');
+          const showBeatNums = spb * this.pps >= 38;
           for (let k = 1; k < p.beatsPerBar; k++) {
             const bx = Math.round(this.timeToX(b * barDur + k * spb));
+            g.fillStyle = col('--grid-bar');
             g.fillRect(bx, h - 7, 1, 7);
+            if (showBeatNums) {
+              g.fillStyle = col('--muted');
+              g.font = '500 11px "Barlow Condensed", "Arial Narrow", sans-serif';
+              g.fillText(`${b + 1}.${k + 1}`, bx + 3, 20);
+              g.font = '700 13px "Barlow Condensed", "Arial Narrow", sans-serif';
+            }
           }
         }
       }
@@ -204,6 +212,7 @@ export class Timeline {
   }
 
   drawClip(g, tr, y, w, col) {
+    const color = displayColor(tr.color);
     const buf = this.app.engine.bufferForTrack(tr);
     const c = tr.clip;
     const dur = buf ? buf.duration : c.trimEnd;
@@ -214,8 +223,8 @@ export class Timeline {
     const dim = tr.mute || (this.project.tracks.some(t => t.solo) && !tr.solo);
     g.save();
     g.globalAlpha = dim ? 0.4 : 1;
-    g.fillStyle = tr.color + '22';
-    g.strokeStyle = tr.color;
+    g.fillStyle = color + (document.documentElement.dataset.resolved === 'dark' ? '33' : '22');
+    g.strokeStyle = color;
     g.lineWidth = tr.id === this.selectedTrackId ? 2 : 1;
     roundRect(g, x0, top, x1 - x0, hh, 6);
     g.fill(); g.stroke();
@@ -225,7 +234,7 @@ export class Timeline {
         ? tr.autotune.processedAudioId : c.audioId;
       const pk = this.peaksFor(audioId, buf);
       const mid = top + hh / 2;
-      g.fillStyle = tr.color;
+      g.fillStyle = color;
       const xa = Math.max(0, Math.floor(x0)), xb = Math.min(w, Math.ceil(x1));
       for (let x = xa; x < xb; x++) {
         const ta = this.xToTime(x) - c.offset, tb = this.xToTime(x + 1) - c.offset;
@@ -244,7 +253,7 @@ export class Timeline {
     const label = (tr.isReference ? 'REF · ' : '') + tr.name + (tr.autotune && tr.autotune.enabled && tr.autotune.processedAudioId ? ' · tuned' : '');
     g.fillText(label, Math.max(x0, 0) + 8, top + 14);
     // trim handles
-    g.fillStyle = tr.color;
+    g.fillStyle = color;
     g.fillRect(x0, top + hh / 2 - 10, 3, 20);
     g.fillRect(x1 - 3, top + hh / 2 - 10, 3, 20);
   }

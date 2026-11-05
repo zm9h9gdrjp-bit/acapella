@@ -3,6 +3,7 @@ import { Timeline } from './timeline.js';
 import { db, uid, requestPersistence } from './storage.js';
 import { encodeWav } from './wav.js';
 import { NOTE_NAMES } from './autotune.js';
+import { displayColor, applyTheme, onThemeChange } from './theme.js';
 
 const $ = (id) => document.getElementById(id);
 // marker-ink colours, picked by hand to sit on cream paper
@@ -12,7 +13,7 @@ const LAST_PROJECT_KEY = 'acapella.lastProject';
 
 // ---------- device settings (per device, not per song) ----------
 function loadSettings() {
-  const def = { latAuto: true, latMs: 30, deviceId: '', monitor: false };
+  const def = { latAuto: true, latMs: 30, deviceId: '', monitor: false, theme: 'auto' };
   try { return { ...def, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; } catch { return def; }
 }
 function saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(app.settings)); } catch { /* */ } }
@@ -168,7 +169,7 @@ function renderHeaders() {
     el.dataset.id = tr.id;
     const tuned = tr.autotune && tr.autotune.enabled && tr.autotune.processedAudioId;
     el.innerHTML = `
-      <div class="swatch" style="background:${tr.color}"></div>
+      <div class="swatch" style="background:${displayColor(tr.color)}"></div>
       <div>
         <div class="th-top">
           <div class="th-name" title="${escapeHtml(tr.name)}">${tr.isReference ? '<span class="badge">REF</span>' : ''}${escapeHtml(tr.name)}</div>
@@ -216,26 +217,33 @@ function fmtTime(t) {
   const m = Math.floor(t / 60), s = t - m * 60;
   return `${m}:${s.toFixed(1).padStart(4, '0')}`;
 }
+const SIG_LABEL = { 2: '2/4', 3: '3/4', 4: '4/4', 5: '5/4', 6: '6/8', 7: '7/8' };
+
 function updateCounter(t, countIn = null) {
   const p = app.project;
   const spb = 60 / p.bpm, barDur = spb * p.beatsPerBar;
-  const counter = document.querySelector('.counter');
-  let bar, beat;
+  const lcd = $('lcd');
+  let beat;
   if (countIn) {
-    counter.classList.add('countin');
-    $('cBar').textContent = '−' + (Math.floor((countIn.total - countIn.beat - 1) / p.beatsPerBar) + 1);
+    // count-in: the bar field shows how many bars are left, the beat field counts 1..N
+    lcd.classList.add('countin');
+    const barsLeft = Math.floor((countIn.total - countIn.beat - 1) / p.beatsPerBar) + 1;
     beat = countIn.beat % p.beatsPerBar;
+    $('cBar').textContent = '-' + barsLeft;
     $('cBeat').textContent = String(beat + 1);
     $('cLabel').textContent = 'Count-in';
   } else {
-    counter.classList.remove('countin');
+    lcd.classList.remove('countin');
     const tt = t + 1e-6;
-    bar = Math.floor(tt / barDur);
+    const bar = Math.floor(tt / barDur);
     beat = Math.floor((tt - bar * barDur) / spb);
     $('cBar').textContent = String(bar + 1);
     $('cBeat').textContent = String(beat + 1);
-    $('cLabel').textContent = 'Bar : Beat';
+    $('cLabel').textContent = app.recording ? 'Rec' : app.engine.isRunning ? (p.loop.enabled ? 'Loop' : 'Play') : '';
   }
+  $('cLabel').classList.toggle('rec', app.recording);
+  $('lcdTempo').textContent = p.bpm;
+  $('lcdSig').textContent = SIG_LABEL[p.beatsPerBar] || p.beatsPerBar + '/4';
   $('cTime').textContent = fmtTime(Math.max(0, t));
   const running = app.engine.isRunning;
   [...$('beatDots').children].forEach((d, i) => {
@@ -743,6 +751,7 @@ $('btnNewProject').addEventListener('click', async () => {
 $('btnSettings').addEventListener('click', async () => {
   const s = app.settings;
   $('monitor').checked = s.monitor;
+  $('themeSel').value = s.theme || 'auto';
   $('latAuto').checked = s.latAuto;
   $('latMs').value = Math.round(s.latMs);
   $('latMs').disabled = s.latAuto;
@@ -780,6 +789,9 @@ $('inputDevice').addEventListener('change', async (e) => {
   try { app.engine.disableMic(); await app.engine.enableMic(e.target.value || undefined); toast('Microphone switched.'); }
   catch (err) { toast('Could not open that microphone: ' + err.message, true); }
 });
+$('themeSel').addEventListener('change', (e) => { app.settings.theme = e.target.value; saveSettings(); applyTheme(e.target.value); });
+$('lcdTempoBtn').addEventListener('click', () => { $('bpm').focus(); $('bpm').select(); });
+$('lcdSigBtn').addEventListener('click', () => { $('timeSig').focus(); if ($('timeSig').showPicker) try { $('timeSig').showPicker(); } catch { /* */ } });
 $('monitor').addEventListener('change', (e) => { app.settings.monitor = e.target.checked; app.engine.setMonitor(e.target.checked); saveSettings(); });
 $('latAuto').addEventListener('change', (e) => { app.settings.latAuto = e.target.checked; $('latMs').disabled = e.target.checked; saveSettings(); });
 $('latMs').addEventListener('change', (e) => { app.settings.latMs = Math.max(0, +e.target.value || 0); saveSettings(); });
@@ -813,6 +825,8 @@ $('trackDialog').addEventListener('close', () => { dlgTrack = null; });
 // ---------- boot ----------
 async function boot() {
   requestPersistence();
+  applyTheme(app.settings.theme);
+  onThemeChange(() => { renderHeaders(); timeline.invalidate(); });
   let p = null;
   try {
     const last = localStorage.getItem(LAST_PROJECT_KEY);

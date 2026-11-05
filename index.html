@@ -2,10 +2,15 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <title>Overdub</title>
   <meta name="description" content="Record and layer a cappella vocals with a click track, auto-tune and reverb.">
   <meta name="theme-color" content="#f3eee2">
+  <script>
+    // apply the saved light/dark choice before first paint (no flash)
+    try { var t = JSON.parse(localStorage.getItem('acapella.settings') || '{}').theme;
+      if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -47,11 +52,23 @@
           <span>Rec</span>
         </button>
       </div>
-      <div class="counter" aria-live="off">
-        <div class="wheels"><span id="cBar">1</span><span class="sep">:</span><span id="cBeat">1</span></div>
-        <div class="counter-sub"><span id="cLabel">Bar : Beat</span><span id="cTime">0:00.0</span></div>
+      <div class="lcd" id="lcd" aria-live="off">
+        <div class="lcd-pos">
+          <span class="lcd-num lcd-bar" id="cBar">1</span><span class="lcd-sep">.</span><span class="lcd-num lcd-beat" id="cBeat">1</span>
+          <span class="lcd-cap lcd-cap-bar">Bar</span><span></span><span class="lcd-cap">Beat</span>
+        </div>
+        <button type="button" class="lcd-field" id="lcdTempoBtn" title="Change tempo">
+          <span class="lcd-num" id="lcdTempo">90</span><span class="lcd-cap">Tempo</span>
+        </button>
+        <button type="button" class="lcd-field lcd-sig" id="lcdSigBtn" title="Change time signature">
+          <span class="lcd-num" id="lcdSig">4/4</span><span class="lcd-cap">Time</span>
+        </button>
+        <div class="lcd-status">
+          <span class="lcd-mode" id="cLabel"></span>
+          <span class="beat-dots" id="beatDots" aria-hidden="true"></span>
+          <span class="lcd-time" id="cTime">0:00.0</span>
+        </div>
       </div>
-      <div class="beat-dots" id="beatDots" aria-hidden="true"></div>
       <div class="meter" title="Microphone level"><div id="meterFill"></div></div>
     </div>
 
@@ -171,6 +188,7 @@
     <form method="dialog" class="dlg">
       <header><h3>Setup</h3><button class="btn ghost" value="close">Close</button></header>
       <div class="dlg-body">
+        <div class="row"><label for="themeSel">Look</label><select id="themeSel"><option value="auto">Match phone</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
         <div class="row"><label for="inputDevice">Microphone</label><select id="inputDevice"><option value="">Default</option></select></div>
         <label class="check"><input type="checkbox" id="monitor"> Hear yourself while recording (headphones only, slight delay)</label>
         <fieldset>

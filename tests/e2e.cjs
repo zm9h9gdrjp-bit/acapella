@@ -23,7 +23,7 @@ const URL = 'http://localhost:8765/';
   // Layer 1: free recording ~3s
   await page.click('#btnRecord');
   await page.waitForTimeout(4500);
-  const counter = await page.textContent('.counter');
+  const counter = await page.textContent('#lcd');
   await page.click('#btnRecord');
   await page.waitForFunction(n => window.__app.project.tracks.length === n, 1, { timeout: 5000 });
   console.log('layer 1 recorded; counter during rec:', counter.replace(/\s+/g, ' ').trim());
