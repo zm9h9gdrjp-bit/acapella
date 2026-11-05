@@ -1,12 +1,12 @@
 {
-  "name": "Acapella Studio",
-  "short_name": "Acapella",
+  "name": "Overdub",
+  "short_name": "Overdub",
   "description": "Record and layer a cappella vocals with a click track, auto-tune and reverb.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#0f1115",
-  "theme_color": "#0f1115",
+  "background_color": "#f3eee2",
+  "theme_color": "#f3eee2",
   "icons": [
     { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },

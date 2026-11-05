@@ -1,4 +1,4 @@
-# Acapella Studio
+# Overdub
 
 A browser-based multitrack recorder for layering a cappella vocals. Record a layer, then stack the next one on top while you hear the earlier ones. A metronome plays in your headphones but never ends up in the recordings.
 

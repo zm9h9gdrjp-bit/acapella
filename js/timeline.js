@@ -132,7 +132,7 @@ export class Timeline {
       const minBarPx = 34;
       const barStep = Math.max(1, Math.pow(2, Math.ceil(Math.log2(minBarPx / (barDur * this.pps)))));
       const firstBar = Math.max(0, Math.floor(t0 / barDur));
-      g.font = '600 12px system-ui, sans-serif';
+      g.font = '700 13px "Barlow Condensed", "Arial Narrow", sans-serif';
       g.textBaseline = 'top';
       for (let b = firstBar; b * barDur <= t1; b++) {
         const x = Math.round(this.timeToX(b * barDur)) + 0.5;
@@ -191,13 +191,13 @@ export class Timeline {
         const row = this.recording.row;
         const y = row * ROW_H;
         const x0 = this.timeToX(this.recording.from), x1 = this.timeToX(this.recording.to);
-        g.fillStyle = 'rgba(239,68,68,0.28)';
-        g.strokeStyle = '#ef4444';
+        g.fillStyle = 'rgba(196,50,27,0.16)';
+        g.strokeStyle = col('--rec');
         roundRect(g, x0, y + 6, Math.max(2, x1 - x0), ROW_H - 13, 6);
         g.fill(); g.stroke();
-        g.fillStyle = '#fecaca';
-        g.font = '600 12px system-ui, sans-serif';
-        g.fillText('● Recording…', Math.max(x0, 0) + 8, y + 22);
+        g.fillStyle = col('--rec');
+        g.font = '700 13px "Barlow Condensed", "Arial Narrow", sans-serif';
+        g.fillText('REC', Math.max(x0, 0) + 8, y + 22);
       }
       this.drawPlayhead(g, h, false, col);
     }
@@ -214,7 +214,7 @@ export class Timeline {
     const dim = tr.mute || (this.project.tracks.some(t => t.solo) && !tr.solo);
     g.save();
     g.globalAlpha = dim ? 0.4 : 1;
-    g.fillStyle = tr.color + '33';
+    g.fillStyle = tr.color + '22';
     g.strokeStyle = tr.color;
     g.lineWidth = tr.id === this.selectedTrackId ? 2 : 1;
     roundRect(g, x0, top, x1 - x0, hh, 6);
@@ -239,9 +239,9 @@ export class Timeline {
     }
     g.restore();
     // label
-    g.font = '600 11px system-ui, sans-serif';
+    g.font = '600 11px "Barlow Condensed", "Arial Narrow", sans-serif';
     g.fillStyle = col('--text');
-    const label = (tr.isReference ? 'REF · ' : '') + tr.name + (tr.autotune && tr.autotune.enabled && tr.autotune.processedAudioId ? ' · ♪ tuned' : '');
+    const label = (tr.isReference ? 'REF · ' : '') + tr.name + (tr.autotune && tr.autotune.enabled && tr.autotune.processedAudioId ? ' · tuned' : '');
     g.fillText(label, Math.max(x0, 0) + 8, top + 14);
     // trim handles
     g.fillStyle = tr.color;

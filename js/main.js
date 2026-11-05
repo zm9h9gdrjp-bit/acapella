@@ -5,7 +5,8 @@ import { encodeWav } from './wav.js';
 import { NOTE_NAMES } from './autotune.js';
 
 const $ = (id) => document.getElementById(id);
-const COLORS = ['#7c9cff', '#f472b6', '#34d399', '#fbbf24', '#a78bfa', '#22d3ee', '#fb923c', '#f87171', '#a3e635', '#e879f9'];
+// marker-ink colours, picked by hand to sit on cream paper
+const COLORS = ['#2f5d8a', '#b8452b', '#3f7a4f', '#7d4f93', '#b07d12', '#1f7373', '#8a3a2c', '#5b6b2e', '#9b4a72', '#44546a'];
 const SETTINGS_KEY = 'acapella.settings';
 const LAST_PROJECT_KEY = 'acapella.lastProject';
 
@@ -152,6 +153,7 @@ function renderTransport() {
   const running = app.engine.isRunning;
   $('btnPlay').classList.toggle('playing', running);
   $('btnPlay').setAttribute('aria-label', running ? 'Stop' : 'Play');
+  $('playLabel').textContent = running ? 'Stop' : 'Play';
   $('btnRecord').classList.toggle('recording', app.recording);
   for (const id of ['bpm', 'bpmUp', 'bpmDown', 'btnTap', 'timeSig', 'countIn']) $(id).disabled = app.recording;
 }
@@ -170,13 +172,13 @@ function renderHeaders() {
       <div>
         <div class="th-top">
           <div class="th-name" title="${escapeHtml(tr.name)}">${tr.isReference ? '<span class="badge">REF</span>' : ''}${escapeHtml(tr.name)}</div>
-          <button class="th-gear" title="Layer settings: volume, pan, reverb, auto-tune" aria-label="Layer settings">⋯</button>
+          <button class="th-gear" title="Volume, pan, reverb, auto-tune">Edit</button>
         </div>
         <div class="th-bottom">
           <button class="ms m" aria-pressed="${tr.mute}" title="Mute">M</button>
           <button class="ms s" aria-pressed="${tr.solo}" title="Solo">S</button>
           <input type="range" min="0" max="1.5" step="0.01" value="${tr.volume}" aria-label="Volume">
-          ${tuned ? '<span class="th-tuned" title="Auto-tune on">♪</span>' : ''}
+          ${tuned ? '<span class="th-tuned" title="Auto-tune on">AT</span>' : ''}
         </div>
       </div>`;
     el.addEventListener('click', (e) => {
@@ -224,7 +226,7 @@ function updateCounter(t, countIn = null) {
     $('cBar').textContent = '−' + (Math.floor((countIn.total - countIn.beat - 1) / p.beatsPerBar) + 1);
     beat = countIn.beat % p.beatsPerBar;
     $('cBeat').textContent = String(beat + 1);
-    $('cLabel').textContent = 'COUNT-IN';
+    $('cLabel').textContent = 'Count-in';
   } else {
     counter.classList.remove('countin');
     const tt = t + 1e-6;
@@ -232,7 +234,7 @@ function updateCounter(t, countIn = null) {
     beat = Math.floor((tt - bar * barDur) / spb);
     $('cBar').textContent = String(bar + 1);
     $('cBeat').textContent = String(beat + 1);
-    $('cLabel').textContent = 'BAR · BEAT';
+    $('cLabel').textContent = 'Bar : Beat';
   }
   $('cTime').textContent = fmtTime(Math.max(0, t));
   const running = app.engine.isRunning;
@@ -350,7 +352,7 @@ async function saveTake(projectId, samples, info) {
   const trimStart = Math.max(0, info.visibleFrom - info.startTl);
   let trimEnd = info.loopLen != null ? trimStart + info.loopLen : dur;
   trimEnd = Math.min(trimEnd, dur);
-  if (trimEnd - trimStart < 0.25) { toast('Take was too short, so it wasn’t kept.'); return; }
+  if (trimEnd - trimStart < 0.25) { toast('Too short to keep.'); return; }
   const audio = { id: uid(), sampleRate: sr, channels: [samples] };
   try {
     await db.saveAudio(audio);
@@ -369,7 +371,7 @@ async function saveTake(projectId, samples, info) {
   renderHeaders();
   app.selectTrack(tr.id);
   await app.saveNow();
-  toast(`${tr.name} saved. Press ● again to stack another layer.`);
+  toast(`${tr.name} saved.`);
 }
 
 function makeTrack({ name, clip, isReference = false }) {
@@ -441,7 +443,7 @@ $('metVol').addEventListener('input', (e) => {
 $('btnLoop').addEventListener('click', () => {
   if (app.recording) return;
   app.project.loop.enabled = !app.project.loop.enabled;
-  if (app.project.loop.enabled) toast('Loop on. Drag across the bar numbers to choose which bars repeat. Recording in a loop records one pass.', false, 5000);
+  if (app.project.loop.enabled) toast('Loop on. Drag across the bar numbers to pick the bars. REC records one pass.', false, 4500);
   app.saveSoon(); renderTransport(); timeline.invalidate(); restartIfPlaying();
 });
 $('btnSnap').addEventListener('click', () => { app.project.snap = !app.project.snap; app.saveSoon(); renderTransport(); });
@@ -509,9 +511,9 @@ function updateAtStatus() {
   const busy = atJobs.has(tr.id);
   $('atApply').disabled = busy;
   let s;
-  if (busy) s = 'Processing…';
+  if (busy) s = 'Working…';
   else if (!a.processedAudioId) s = 'Not applied yet.';
-  else if (sameParams(a.appliedParams, atParams(tr))) s = a.enabled ? '✓ Applied and on.' : 'Applied, but switched off (you’re hearing the original).';
+  else if (sameParams(a.appliedParams, atParams(tr))) s = a.enabled ? 'Applied and on.' : 'Applied, but switched off (you’re hearing the original).';
   else s = 'Settings changed. Press Apply to hear them.';
   $('atStatus').textContent = s;
 }
@@ -566,7 +568,7 @@ $('tdDuplicate').addEventListener('click', async () => {
   app.project.tracks.splice(app.project.tracks.indexOf(tr) + 1, 0, copy);
   $('trackDialog').close();
   renderHeaders(); app.selectTrack(copy.id); await app.saveNow();
-  toast('Duplicated. Try panning the two copies left and right for a wider sound.');
+  toast('Copied. Pan one left and one right for a wider sound.');
 });
 
 async function deleteAudioIfUnused(id) {
@@ -635,7 +637,7 @@ async function applyAutotune(tr) {
     } else {
       await db.saveProject(project);
     }
-    toast(`Auto-tune applied to ${tr.name}.`);
+    toast(`${tr.name}: auto-tune done.`);
   } catch (e) {
     toast('Auto-tune failed: ' + e.message, true);
   } finally {
@@ -666,7 +668,7 @@ $('fileImport').addEventListener('change', async (e) => {
     });
     app.project.tracks.unshift(tr);
     renderHeaders(); app.selectTrack(tr.id); await app.saveNow();
-    toast('Reference track added. It’s left out of exports unless you choose otherwise.', false, 5000);
+    toast('Added as a reference. It stays out of exports unless you tick it.', false, 4500);
   } catch (err) {
     toast('Could not import that file: ' + (err.message || err), true, 6000);
   }
@@ -732,7 +734,7 @@ $('btnNewProject').addEventListener('click', async () => {
   await app.saveNow();
   $('projectsDialog').close();
   const p = await createProject();
-  toast('New song created. Give it a name at the top.');
+  toast('New song. Name it at the top.');
   $('projectName').select();
   return p;
 });
@@ -769,8 +771,8 @@ async function fillStorageInfo() {
     const est = navigator.storage && navigator.storage.estimate ? await navigator.storage.estimate() : null;
     const persisted = navigator.storage && navigator.storage.persisted ? await navigator.storage.persisted() : false;
     $('storageInfo').textContent = est
-      ? `Recordings are stored on this device only. Using ${(est.usage / 1048576).toFixed(1)} MB. ${persisted ? 'Storage is protected from automatic clean-up.' : 'Tip: add this app to your home screen so the browser keeps your recordings.'}`
-      : 'Recordings are stored on this device only.';
+      ? `Stored on this device only. Using ${(est.usage / 1048576).toFixed(1)} MB. ${persisted ? 'Protected from automatic clean-up.' : 'Add it to your home screen so the browser keeps your takes.'}`
+      : 'Stored on this device only.';
   } catch { /* ignore */ }
 }
 $('inputDevice').addEventListener('change', async (e) => {
@@ -795,9 +797,9 @@ $('btnCalibrate').addEventListener('click', async () => {
     app.settings.latMs = Math.round(sec * 1000);
     saveSettings();
     $('latAuto').checked = false; $('latMs').disabled = false; $('latMs').value = app.settings.latMs;
-    out.textContent = `✓ Measured ${app.settings.latMs} ms. New takes will be shifted by this amount. Plug your headphones back in.`;
+    out.textContent = `Measured ${app.settings.latMs} ms. New takes get moved by that much. Headphones back in.`;
   } catch (e) {
-    out.textContent = '✗ ' + e.message;
+    out.textContent = e.message;
   }
   $('btnCalibrate').disabled = false;
 });

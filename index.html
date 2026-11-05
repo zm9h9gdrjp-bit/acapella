@@ -3,49 +3,53 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Acapella Studio</title>
+  <title>Overdub</title>
   <meta name="description" content="Record and layer a cappella vocals with a click track, auto-tune and reverb.">
-  <meta name="theme-color" content="#0f1115">
+  <meta name="theme-color" content="#f3eee2">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&display=swap">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand" aria-hidden="true">
-      <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 15a4 4 0 0 0 4-4V6a4 4 0 1 0-8 0v5a4 4 0 0 0 4 4Zm7-4a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.93V20H8a1 1 0 1 0 0 2h8a1 1 0 1 0 0-2h-3v-2.07A7 7 0 0 0 19 11Z"/></svg>
-    </div>
+    <div class="wordmark">Over<b>dub</b></div>
     <input id="projectName" class="project-name" aria-label="Song name" spellcheck="false">
     <div class="topbar-actions">
       <button id="btnProjects" class="btn ghost" title="Songs">Songs</button>
-      <button id="btnImport" class="btn ghost" title="Import a reference track (MP3, WAV…)">Import</button>
+      <button id="btnImport" class="btn ghost" title="Add a song to sing along with (MP3, WAV)">Import</button>
       <button id="btnExport" class="btn ghost" title="Export the mix as WAV">Export</button>
-      <button id="btnSettings" class="btn ghost icon" title="Settings" aria-label="Settings">
-        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.4 2.9a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1L11 21h4l.4-2.9c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5L19.4 13ZM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" transform="translate(-1 0)"/></svg>
-      </button>
+      <button id="btnSettings" class="btn ghost" title="Microphone and timing">Setup</button>
       <input type="file" id="fileImport" accept="audio/*" hidden>
     </div>
   </header>
 
   <section class="transport" aria-label="Transport">
     <div class="transport-main">
-      <button id="btnHome" class="tbtn" title="Back to start (Home)" aria-label="Back to start">
-        <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M6 5h2v14H6zM20 5v14L9 12z"/></svg>
-      </button>
-      <button id="btnPlay" class="tbtn play" title="Play / Stop (Space)" aria-label="Play">
-        <svg class="i-play" viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M7 4v16l13-8z"/></svg>
-        <svg class="i-stop" viewBox="0 0 24 24" width="24" height="24"><rect fill="currentColor" x="6" y="6" width="12" height="12" rx="1.5"/></svg>
-      </button>
-      <button id="btnRecord" class="tbtn record" title="Record a new layer (R)" aria-label="Record">
-        <svg viewBox="0 0 24 24" width="24" height="24"><circle fill="currentColor" cx="12" cy="12" r="7"/></svg>
-      </button>
+      <div class="keys">
+        <button id="btnHome" class="key" title="Back to the start (Home)">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M5 5h2.5v14H5zM19 5v14L8.5 12z"/></svg>
+          <span>Rew</span>
+        </button>
+        <button id="btnPlay" class="key play" title="Play / stop (Space)" aria-label="Play">
+          <svg class="i-play" viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6 4v16l14-8z"/></svg>
+          <svg class="i-stop" viewBox="0 0 24 24" width="20" height="20"><rect fill="currentColor" x="5" y="5" width="14" height="14"/></svg>
+          <span id="playLabel">Play</span>
+        </button>
+        <button id="btnRecord" class="key record" title="Record a new layer (R)" aria-label="Record">
+          <i class="rec-lamp"></i>
+          <span>Rec</span>
+        </button>
+      </div>
       <div class="counter" aria-live="off">
-        <div class="counter-main"><span id="cBar">1</span><span class="dot">.</span><span id="cBeat">1</span></div>
-        <div class="counter-sub"><span id="cLabel">BAR · BEAT</span> <span id="cTime">0:00.0</span></div>
+        <div class="wheels"><span id="cBar">1</span><span class="sep">:</span><span id="cBeat">1</span></div>
+        <div class="counter-sub"><span id="cLabel">Bar : Beat</span><span id="cTime">0:00.0</span></div>
       </div>
       <div class="beat-dots" id="beatDots" aria-hidden="true"></div>
       <div class="meter" title="Microphone level"><div id="meterFill"></div></div>
@@ -59,7 +63,7 @@
           <input id="bpm" type="number" min="30" max="300" step="1" inputmode="numeric">
           <button class="btn sm" id="bpmUp" aria-label="Faster">+</button>
         </div>
-        <button class="btn sm" id="btnTap" title="Tap the beat to set the tempo">Tap</button>
+        <button class="btn sm" id="btnTap" title="Tap along to set the tempo">Tap</button>
       </div>
       <div class="ctl">
         <label for="timeSig">Time</label>
@@ -69,9 +73,7 @@
         </select>
       </div>
       <div class="ctl">
-        <button class="toggle" id="btnMetronome" aria-pressed="true" title="Metronome click (only in your headphones, never recorded)">
-          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M10 2h4l4.6 18H5.4L10 2Zm1.6 2-1.1 4.2 3.8 6.4 1.5-2.6L13.4 4Zm2 12-3-5.1L8 18h8.2l-1.7-2.9Z"/></svg>
-          Click
+        <button class="toggle" id="btnMetronome" aria-pressed="true" title="Metronome click (only in your headphones, never recorded)"><i class="led"></i>Click
         </button>
         <input id="metVol" type="range" min="0" max="1" step="0.05" aria-label="Click volume" class="mini-range">
       </div>
@@ -80,14 +82,12 @@
         <select id="countIn"><option value="0">Off</option><option value="1">1 bar</option><option value="2">2 bars</option></select>
       </div>
       <div class="ctl">
-        <button class="toggle" id="btnLoop" aria-pressed="false" title="Loop a section. Drag on the bar numbers to choose bars.">
-          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7Zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4Z"/></svg>
-          Loop
+        <button class="toggle" id="btnLoop" aria-pressed="false" title="Loop a section. Drag on the bar numbers to choose bars."><i class="led"></i>Loop
         </button>
         <span id="loopLabel" class="muted small"></span>
       </div>
       <div class="ctl">
-        <button class="toggle" id="btnSnap" aria-pressed="true" title="Snap clip edits to the beat">Snap</button>
+        <button class="toggle" id="btnSnap" aria-pressed="true" title="Snap clip edits to the beat"><i class="led"></i>Snap</button>
       </div>
       <div class="ctl zoom">
         <button class="btn sm" id="zoomOut" aria-label="Zoom out">−</button>
@@ -113,9 +113,9 @@
   </main>
 
   <div class="empty" id="emptyState">
-    <h2>Ready when you are</h2>
-    <p>🎧 Put on <strong>headphones</strong> so the click and the other layers don’t leak into your mic.</p>
-    <p>Set the tempo, then press <span class="rec-dot"></span> to record your first layer. Each new take stacks on top.</p>
+    <h2>Nothing on tape yet</h2>
+    <p>Headphones on. The click plays in your ears only, so it never ends up in a take.</p>
+    <p>Set a tempo, press <kbd>REC</kbd>, sing after the count-in, press <kbd>REC</kbd> again to stop. The next take goes on top.</p>
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -123,7 +123,7 @@
   <!-- Track settings -->
   <dialog id="trackDialog">
     <form method="dialog" class="dlg">
-      <header><input id="tdName" class="dlg-title-input" aria-label="Layer name"><button class="btn ghost icon" value="close" aria-label="Close">✕</button></header>
+      <header><input id="tdName" class="dlg-title-input" aria-label="Layer name"><button class="btn ghost" value="close">Close</button></header>
       <div class="dlg-body">
         <div class="row"><label>Volume</label><input type="range" id="tdVolume" min="0" max="1.5" step="0.01"><output id="tdVolumeOut"></output></div>
         <div class="row"><label>Pan</label><input type="range" id="tdPan" min="-1" max="1" step="0.01"><output id="tdPanOut"></output></div>
@@ -146,7 +146,7 @@
             <span id="atStatus" class="muted small"></span>
           </div>
           <progress id="atProgress" max="1" value="0" hidden></progress>
-          <p class="muted small">Detects each note you sang and nudges it to the nearest note in the key. Your original recording is always kept. Untick to compare.</p>
+          <p class="muted small">Finds the pitch of each note and pulls it to the nearest note in the key. The original take stays saved; untick the box to hear it.</p>
         </fieldset>
       </div>
       <footer>
@@ -160,26 +160,26 @@
   <!-- Projects -->
   <dialog id="projectsDialog">
     <form method="dialog" class="dlg">
-      <header><h3>Your songs</h3><button class="btn ghost icon" value="close" aria-label="Close">✕</button></header>
+      <header><h3>Songs</h3><button class="btn ghost" value="close">Close</button></header>
       <div class="dlg-body"><ul id="projectList" class="project-list"></ul></div>
-      <footer><button type="button" class="btn primary" id="btnNewProject">+ New song</button></footer>
+      <footer><button type="button" class="btn primary" id="btnNewProject">New song</button></footer>
     </form>
   </dialog>
 
   <!-- Settings -->
   <dialog id="settingsDialog">
     <form method="dialog" class="dlg">
-      <header><h3>Settings</h3><button class="btn ghost icon" value="close" aria-label="Close">✕</button></header>
+      <header><h3>Setup</h3><button class="btn ghost" value="close">Close</button></header>
       <div class="dlg-body">
         <div class="row"><label for="inputDevice">Microphone</label><select id="inputDevice"><option value="">Default</option></select></div>
-        <label class="check"><input type="checkbox" id="monitor"> Hear yourself while recording (headphones only; adds a slight delay)</label>
+        <label class="check"><input type="checkbox" id="monitor"> Hear yourself while recording (headphones only, slight delay)</label>
         <fieldset>
           <legend>Latency compensation</legend>
-          <p class="muted small">Recordings arrive a little late because of the round trip through speakers/headphones and the mic. The app shifts every new take earlier by this amount so the layers line up.</p>
+          <p class="muted small">Sound takes a moment to get out of the headphones and back in through the mic. Each new take is moved earlier by this much so layers sit together.</p>
           <label class="check"><input type="checkbox" id="latAuto"> Automatic (estimated <span id="latEstimate">–</span> ms)</label>
           <div class="row"><label for="latMs">Manual</label><input type="number" id="latMs" min="0" max="1000" step="1"> <span class="muted small">ms</span></div>
-          <button type="button" class="btn" id="btnCalibrate">Measure it</button>
-          <p class="muted small">To measure: <strong>unplug headphones</strong>, turn the volume up, stay quiet, and press “Measure it”. You’ll hear 8 clicks.</p>
+          <button type="button" class="btn" id="btnCalibrate">Measure</button>
+          <p class="muted small">Unplug headphones, turn the volume up, keep quiet, press Measure. Eight clicks will play.</p>
           <p id="calibResult" class="small"></p>
         </fieldset>
         <p class="muted small" id="storageInfo"></p>
@@ -191,9 +191,9 @@
   <!-- Export -->
   <dialog id="exportDialog">
     <form method="dialog" class="dlg">
-      <header><h3>Export mix</h3><button class="btn ghost icon" value="close" aria-label="Close">✕</button></header>
+      <header><h3>Export mix</h3><button class="btn ghost" value="close">Close</button></header>
       <div class="dlg-body">
-        <p class="muted small">Renders all audible layers (respecting mute/solo, volume, pan, reverb and auto-tune) into one stereo WAV. The click is never included.</p>
+        <p class="muted small">Bounces every layer you can hear (mute, solo, volume, pan, reverb and auto-tune included) to one stereo WAV. No click.</p>
         <label class="check" id="exportRefRow"><input type="checkbox" id="exportIncludeRef"> Include reference tracks</label>
         <p id="exportStatus" class="small"></p>
       </div>
