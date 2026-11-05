@@ -1,5 +1,5 @@
 // Network-first service worker: always tries the latest version, falls back to cache offline.
-const CACHE = 'overdub-v4';
+const CACHE = 'overdub-v5';
 const SHELL = [
   './', 'index.html', 'css/style.css', 'manifest.webmanifest', 'icons/icon.svg',
   'js/main.js', 'js/audio-engine.js', 'js/timeline.js', 'js/storage.js', 'js/wav.js',

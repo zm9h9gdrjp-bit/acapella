@@ -18,8 +18,12 @@ export class AudioEngine {
   }
 
   async init() {
+    // a phone can close the audio engine while the app sits in the background: build a new one
+    if (this.ctx && this.ctx.state === 'closed') { this.ctx = null; this.mic = null; }
     if (this.ctx) {
-      if (this.ctx.state !== 'running') await this.ctx.resume();
+      if (this.ctx.state !== 'running') {
+        try { await this.ctx.resume(); } catch { /* resumes on the next tap */ }
+      }
       return;
     }
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -62,13 +66,21 @@ export class AudioEngine {
   }
 
   // ---------- microphone ----------
+  /**
+   * Open the microphone. Returns { mic, usedFallback }.
+   * The mic is only held while recording: see releaseMic().
+   */
   async enableMic(deviceId) {
     await this.init();
-    if (this.mic && (!deviceId || this.mic.deviceId === deviceId)) return this.mic;
+    if (this.mic && micAlive(this.mic) && (!deviceId || this.mic.deviceId === deviceId)) {
+      return { mic: this.mic, usedFallback: false };
+    }
+    // the old stream may have been cut off by the phone (app backgrounded, call, restart)
     this.disableMic();
-    const stream = await navigator.mediaDevices.getUserMedia({
+    setAudioSession('play-and-record');
+    const constraints = (id) => ({
       audio: {
-        deviceId: deviceId ? { exact: deviceId } : undefined,
+        deviceId: id ? { ideal: id } : undefined,
         // processing meant for calls ruins singing; turn it off
         echoCancellation: false,
         noiseSuppression: false,
@@ -76,7 +88,20 @@ export class AudioEngine {
         channelCount: 1,
       },
     });
+    let stream, usedFallback = false;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraints(deviceId));
+    } catch (e) {
+      // a saved mic ID can go stale after a restart; fall back to the default mic
+      if (!deviceId || !['OverconstrainedError', 'NotFoundError', 'NotReadableError'].includes(e.name)) {
+        setAudioSession('playback');
+        throw e;
+      }
+      stream = await navigator.mediaDevices.getUserMedia(constraints(null));
+      usedFallback = true;
+    }
     const ctx = this.ctx;
+    if (ctx.state !== 'running') { try { await ctx.resume(); } catch { /* */ } }
     const source = ctx.createMediaStreamSource(stream);
     const node = new AudioWorkletNode(ctx, 'recorder-processor', { numberOfInputs: 1, numberOfOutputs: 1 });
     const sink = ctx.createGain();
@@ -89,15 +114,24 @@ export class AudioEngine {
     const track = stream.getAudioTracks()[0];
     const settings = track.getSettings ? track.getSettings() : {};
     node.port.onmessage = (e) => this._onWorkletMessage(e.data);
-    this.mic = { stream, source, node, monitor, deviceId: settings.deviceId || deviceId, inputLatency: settings.latency };
-    return this.mic;
+    const mic = { stream, track, source, node, sink, monitor, deviceId: settings.deviceId || deviceId, inputLatency: settings.latency };
+    track.addEventListener('ended', () => { if (this.mic === mic) this.disableMic(); });
+    this.mic = mic;
+    return { mic, usedFallback };
   }
 
+  /** Close the microphone and hand the phone's audio back to normal media playback. */
   disableMic() {
-    if (!this.mic) return;
-    this.mic.stream.getTracks().forEach(t => t.stop());
-    try { this.mic.source.disconnect(); this.mic.node.disconnect(); this.mic.monitor.disconnect(); } catch { /* */ }
+    const mic = this.mic;
     this.mic = null;
+    if (mic) {
+      mic.stream.getTracks().forEach(t => t.stop());
+      try { mic.source.disconnect(); mic.node.disconnect(); mic.sink.disconnect(); mic.monitor.disconnect(); } catch { /* */ }
+    }
+    // While a page holds the mic, phones switch to "call" audio: quiet earpiece-style output.
+    // Leaving that mode is what brings playback back to full volume.
+    setAudioSession('playback');
+    this.onLevel && this.onLevel(0);
   }
 
   setMonitor(on) {
@@ -158,6 +192,7 @@ export class AudioEngine {
     let from = Math.max(0, opts.from || 0);
     if (loop && (from < loop.start || from >= loop.end)) from = loop.start;
 
+    if (!opts.record && !this.mic) setAudioSession('playback');
     const countInDur = opts.record ? project.countInBars * barDur : 0;
     const t0 = ctx.currentTime + 0.15;
     const firstSegCtx = t0 + countInDur;
@@ -336,6 +371,8 @@ export class AudioEngine {
         const aligned = samples.slice(drop);
         let loopLen = null;
         if (tp.loop) loopLen = tp.loop.end - tp.from;
+        // take is captured: let go of the mic so playback returns to normal volume
+        if (this.mic && !this.transport) this.disableMic();
         ri.onRecorded && ri.onRecorded(aligned, {
           sampleRate: ri.sampleRate,
           startTl: ri.startTl,
@@ -443,6 +480,15 @@ export class AudioEngine {
 }
 
 // ---------- helpers ----------
+function micAlive(mic) {
+  return mic.track && mic.track.readyState === 'live' && !mic.track.muted && mic.stream.active;
+}
+
+/** Safari 17+: tell the phone whether we're recording or just playing. Elsewhere a no-op. */
+function setAudioSession(type) {
+  try { if (navigator.audioSession && navigator.audioSession.type !== type) navigator.audioSession.type = type; } catch { /* */ }
+}
+
 function isAudible(tr, anySolo) {
   if (tr.mute) return false;
   if (anySolo && !tr.solo) return false;

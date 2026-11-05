@@ -324,10 +324,11 @@ async function toggleRecord() {
     return;
   }
   try {
-    await app.engine.enableMic(app.settings.deviceId || undefined);
+    const { usedFallback } = await openMic();
+    if (usedFallback) toast('The chosen microphone wasn\u2019t found, so the built-in one is being used.', false, 4500);
   } catch (e) {
     toast(e.name === 'NotAllowedError'
-      ? 'Microphone access was blocked. Allow it in your browser settings and try again.'
+      ? 'Microphone access is blocked. Allow it for this app in your phone\u2019s settings, then try again.'
       : 'Could not open the microphone: ' + e.message, true, 6000);
     return;
   }
@@ -386,6 +387,17 @@ async function saveTake(projectId, samples, info) {
   timeline.scrollToRow(p.tracks.length - 1);
   await app.saveNow();
   toast(`${tr.name} saved.`);
+}
+
+async function openMic() {
+  const wanted = app.settings.deviceId || undefined;
+  const res = await app.engine.enableMic(wanted);
+  // phones hand out new mic IDs after a restart; forget one that no longer matches
+  if (wanted && (res.usedFallback || (res.mic.deviceId && res.mic.deviceId !== wanted))) {
+    res.usedFallback = true;
+    app.settings.deviceId = ''; saveSettings();
+  }
+  return res;
 }
 
 function makeTrack({ name, clip, isReference = false }) {
@@ -877,8 +889,8 @@ async function fillStorageInfo() {
 }
 $('inputDevice').addEventListener('change', async (e) => {
   app.settings.deviceId = e.target.value; saveSettings();
-  try { app.engine.disableMic(); await app.engine.enableMic(e.target.value || undefined); toast('Microphone switched.'); }
-  catch (err) { toast('Could not open that microphone: ' + err.message, true); }
+  if (!app.recording) app.engine.disableMic();
+  toast('That microphone will be used for the next take.');
 });
 $('themeSel').addEventListener('change', (e) => { app.settings.theme = e.target.value; saveSettings(); applyTheme(e.target.value); });
 $('lcdTempoBtn').addEventListener('click', () => { $('bpm').focus(); $('bpm').select(); });
@@ -891,7 +903,7 @@ $('btnCalibrate').addEventListener('click', async () => {
   out.textContent = 'Listening… stay quiet.';
   $('btnCalibrate').disabled = true;
   try {
-    await app.engine.enableMic(app.settings.deviceId || undefined);
+    await openMic();
     const wasMonitor = app.engine.monitorEnabled;
     app.engine.setMonitor(false);
     const sec = await app.engine.calibrateLatency();
@@ -903,6 +915,8 @@ $('btnCalibrate').addEventListener('click', async () => {
     out.textContent = `Measured ${app.settings.latMs} ms. New takes get moved by that much. Headphones back in.`;
   } catch (e) {
     out.textContent = e.message;
+  } finally {
+    if (!app.recording) app.engine.disableMic();
   }
   $('btnCalibrate').disabled = false;
 });
@@ -931,7 +945,14 @@ async function boot() {
   app.engine.setMonitor(app.settings.monitor);
   requestAnimationFrame(frame);
   window.addEventListener('pagehide', () => app.saveNow());
-  document.addEventListener('visibilitychange', () => { if (document.hidden) app.saveNow(); });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) return;
+    // going to the background: finish any take and let go of the mic,
+    // otherwise the phone can cut it off and the next take would be silent
+    if (app.recording) stopTransport();
+    else app.engine.disableMic();
+    app.saveNow();
+  });
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
