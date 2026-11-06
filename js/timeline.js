@@ -10,6 +10,7 @@ export const ROW_H = 76;
 export const STRIP_H = 24;
 export const BAR_H = 38;
 export const RULER_H = STRIP_H + BAR_H;
+const ADD_ROW_H = 52; // the '+ Add layer' row under the layer names
 const EDGE = 12;       // px grab zone for clip trimming
 const HANDLE = 18;     // px grab zone for loop handles
 const FONT_B = '700 13px "Barlow Condensed", "Arial Narrow", sans-serif';
@@ -98,7 +99,7 @@ export class Timeline {
 
   updateSize() {
     this.spacer.style.width = Math.ceil(this.totalDuration() * this.pps) + 'px';
-    const contentH = this.rowCount() * ROW_H;
+    const contentH = this.rowCount() * ROW_H + ADD_ROW_H;
     this.spacer.style.height = Math.max(contentH, this.scroller.clientHeight) + 'px';
     // same scrollable height for the layer names so both columns scroll together
     const th = this.headersViewport.firstElementChild;
@@ -265,6 +266,11 @@ export class Timeline {
         }
         g.fillStyle = col('--rule');
         g.fillRect(0, y + ROW_H - 1, w, 1);
+        if (!tr.clips.length && !(this.recording && this.recording.row === row)) {
+          g.font = FONT_S; g.textBaseline = 'middle'; g.fillStyle = col('--muted');
+          g.fillText(tr.id === this.app.selectedTrackId
+            ? 'EMPTY · REC RECORDS HERE' : 'EMPTY LAYER', 12, y + ROW_H / 2);
+        }
         for (const c of tr.clips) {
           if (moving && c === moving.clip) continue; // drawn at its drop position below
           this.drawClip(g, tr, c, y, w, col);

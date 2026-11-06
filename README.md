@@ -7,6 +7,7 @@ Everything stays **on your device** (in the browser's IndexedDB). There are no a
 ## Features
 
 - **Unlimited layers.** Each take becomes a new track with volume, pan, mute (M), solo (S) and reverb.
+- **Adding and removing layers.** Tap **+ Layer** (top-left, always visible) or **+ Add layer** under the list. Select an empty layer and press REC to record straight into it. The bin icon on a layer deletes it in one tap, and the message that pops up has **Undo**. Keyboard: `N` new layer, `Delete` removes the selected clip, or the selected layer if no clip is selected.
 - **Metronome / click.** It goes straight to your headphones and is never recorded or exported. You can set its volume, use a 1–2 bar count-in, and see a live **bar · beat** counter with beat dots.
 - **Tempo and time signature.** Set the BPM with ±, by typing, or with **Tap** tempo. Time signatures from 2/4 to 7/8.
 - **Timeline with bars and beats.** Tap to move the playhead, drag clips to move them, and drag clip edges to trim. **Snap** locks edits to the beat. Use Zoom ± (or Ctrl/⌘ + scroll).

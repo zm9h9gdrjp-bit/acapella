@@ -434,3 +434,35 @@ progress { width: 100%; accent-color: var(--ink); height: 6px; }
 .quick { display: grid; gap: 6px; }
 .caps-label { font-family: var(--label); text-transform: uppercase; letter-spacing: .08em; font-size: 13px; color: var(--muted); }
 .quick-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* creating / deleting layers */
+.corner-row { display: flex; align-items: center; justify-content: space-between; padding: 0 6px 0 10px; gap: 4px; min-width: 0; }
+.corner .corner-row .corner-count { padding: 0; }
+.add-layer {
+  font-family: var(--label); font-weight: 700; font-size: 13px; letter-spacing: .06em; text-transform: uppercase;
+  background: var(--panel); color: var(--text); border: 1px solid var(--border); border-bottom-width: 3px; border-radius: 3px;
+  padding: 2px 8px 1px; cursor: pointer; white-space: nowrap;
+}
+.add-layer:active { border-bottom-width: 1px; border-top-width: 3px; }
+.add-row {
+  height: 52px; display: flex; align-items: center; padding: 0 10px; border-bottom: 1px dashed var(--rule);
+}
+.add-row button {
+  width: 100%; height: 34px; background: transparent; border: 1px dashed var(--border); border-radius: 3px; cursor: pointer; color: var(--muted);
+  font-family: var(--label); font-weight: 700; font-size: 13px; letter-spacing: .08em; text-transform: uppercase;
+}
+.add-row button:hover { color: var(--text); border-color: var(--text); }
+.th-del {
+  margin-left: auto; width: 26px; height: 24px; flex: none; display: grid; place-items: center; padding: 0; cursor: pointer;
+  background: transparent; border: 1px solid transparent; border-radius: 2px; color: var(--muted);
+}
+.th-del:hover { color: var(--rec); border-color: var(--border); }
+.track-header.empty-layer .th-name { color: var(--muted); }
+.toast { display: flex; align-items: center; gap: 14px; }
+.toast.has-action { pointer-events: auto; }
+#toastAction {
+  background: none; border: none; color: inherit; cursor: pointer; padding: 2px 0;
+  font-family: var(--label); font-weight: 700; font-size: 14px; letter-spacing: .1em; text-transform: uppercase;
+  text-decoration: underline; text-underline-offset: 3px;
+}
+@media (max-width: 640px) { .corner .corner-row .corner-count { display: none; } .corner-row { justify-content: center; } }

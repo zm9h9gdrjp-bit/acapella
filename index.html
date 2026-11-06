@@ -144,7 +144,10 @@
   <main class="layers" id="layersPanel">
     <div class="corner">
       <span class="corner-loop">Loop</span>
-      <span class="corner-count" id="trackCount">0 layers</span>
+      <div class="corner-row">
+        <span class="corner-count" id="trackCount">0 layers</span>
+        <button type="button" class="add-layer" id="btnAddLayer" title="Add an empty layer">+ Layer</button>
+      </div>
     </div>
     <div class="ruler-wrap"><canvas id="rulerCanvas"></canvas></div>
     <div class="headers-viewport" id="headersViewport"><div id="trackHeaders"></div></div>
@@ -160,7 +163,7 @@
     </div>
   </main>
 
-  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"><span id="toastMsg"></span><button type="button" id="toastAction" hidden></button></div>
 
   <!-- Track settings -->
   <dialog id="trackDialog">

@@ -157,9 +157,14 @@ const timeline = new Timeline({
 
 // ---------- toast ----------
 let toastTimer;
-function toast(msg, isError = false, ms = 3200) {
+function toast(msg, isError = false, ms = 3200, action = null) {
   const el = $('toast');
-  el.textContent = msg;
+  $('toastMsg').textContent = msg;
+  const btn = $('toastAction');
+  btn.hidden = !action;
+  el.classList.toggle('has-action', !!action);
+  btn.onclick = action ? () => { el.classList.remove('show'); action.fn(); } : null;
+  if (action) btn.textContent = action.label;
   el.classList.toggle('error', isError);
   el.classList.add('show');
   clearTimeout(toastTimer);
@@ -237,7 +242,7 @@ function renderHeaders() {
   wrap.innerHTML = '';
   p.tracks.forEach((tr) => {
     const el = document.createElement('div');
-    el.className = 'track-header' + (tr.id === app.selectedTrackId ? ' selected' : '');
+    el.className = 'track-header' + (tr.id === app.selectedTrackId ? ' selected' : '') + (tr.clips.length ? '' : ' empty-layer');
     el.dataset.id = tr.id;
     const tuned = tr.autotune && tr.autotune.enabled && Object.keys(tr.autotune.processed || {}).length > 0;
     el.innerHTML = `
@@ -252,6 +257,9 @@ function renderHeaders() {
           <button class="ms s" aria-pressed="${tr.solo}" title="Solo">S</button>
           <input type="range" min="0" max="1.5" step="0.01" value="${tr.volume}" aria-label="Volume">
           ${tuned ? '<span class="th-tuned" title="Auto-tune on">AT</span>' : ''}
+          <button class="th-del" title="Delete this layer (Undo brings it back)" aria-label="Delete layer ${escapeHtml(tr.name)}">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 7V4h4v3M6 7l1 13h10l1-13"/></g></svg>
+          </button>
         </div>
       </div>`;
     el.addEventListener('click', (e) => {
@@ -267,8 +275,14 @@ function renderHeaders() {
       tr.solo = !tr.solo; e.currentTarget.setAttribute('aria-pressed', String(tr.solo)); mixChanged();
     });
     el.querySelector('input[type=range]').addEventListener('input', (e) => { tr.volume = +e.target.value; mixChanged(); });
+    el.querySelector('.th-del').addEventListener('click', () => deleteLayer(tr));
     wrap.appendChild(el);
   });
+  const add = document.createElement('div');
+  add.className = 'add-row';
+  add.innerHTML = '<button type="button">+ Add layer</button>';
+  add.querySelector('button').addEventListener('click', addLayer);
+  wrap.appendChild(add);
   $('trackCount').textContent = `${p.tracks.length} layer${p.tracks.length === 1 ? '' : 's'}`;
   $('emptyState').hidden = p.tracks.length > 0 || app.recording;
   timeline.invalidate();
@@ -401,7 +415,9 @@ async function toggleRecord() {
   }
   const project = app.project;
   const projectId = project.id;
-  const row = project.tracks.length;
+  // a selected empty layer gets the take; otherwise the take gets a new layer
+  const target = project.tracks.find(t => t.id === app.selectedTrackId && !t.clips.length && !t.isReference) || null;
+  const row = target ? project.tracks.indexOf(target) : project.tracks.length;
   try {
     app.recording = true;
     await app.engine.play({
@@ -410,7 +426,7 @@ async function toggleRecord() {
       record: true,
       latency: latencySeconds(),
       onEnded: onTransportEnded,
-      onRecorded: (samples, info) => saveTake(projectId, samples, info),
+      onRecorded: (samples, info) => saveTake(projectId, samples, info, target && target.id),
     });
   } catch (e) {
     app.recording = false;
@@ -420,12 +436,12 @@ async function toggleRecord() {
   }
   const from = app.engine.transport.from;
   app.playStart = from;
-  timeline.recording = { row, from, to: from, newRow: true };
+  timeline.recording = { row, from, to: from, newRow: !target };
   $('emptyState').hidden = true;
   renderTransport();
 }
 
-async function saveTake(projectId, samples, info) {
+async function saveTake(projectId, samples, info, targetId = null) {
   if (!app.project || app.project.id !== projectId) return;
   const p = app.project;
   const sr = info.sampleRate;
@@ -444,12 +460,13 @@ async function saveTake(projectId, samples, info) {
   app.engine.setBufferFromRecord(audio);
   const before = app.snapshot();
   const clip = { id: uid(), audioId: audio.id, offset: info.startTl, trimStart, trimEnd };
-  const tr = makeTrack({ name: nextLayerName(), clips: [clip] });
-  p.tracks.push(tr);
+  let tr = targetId && p.tracks.find(t => t.id === targetId && !t.clips.length);
+  if (tr) { tr.clips.push(clip); ensureTuned(tr); }
+  else { tr = makeTrack({ name: nextLayerName(), clips: [clip] }); p.tracks.push(tr); }
   app.selectedTrackId = tr.id;
   app.selectedClipId = clip.id;
   app.commit(before);
-  timeline.scrollToRow(p.tracks.length - 1);
+  timeline.scrollToRow(p.tracks.indexOf(tr));
   toast(`${tr.name} saved.`);
 }
 
@@ -562,8 +579,14 @@ document.addEventListener('keydown', (e) => {
   if (mod && k === 'v') { e.preventDefault(); pasteClip(); return; }
   if (mod && k === 'd') { e.preventDefault(); doRepeat({ times: 2 }); return; }
   if (mod) return;
-  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteClip(); return; }
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    e.preventDefault();
+    if (selectedClip()) deleteClip();
+    else { const tr = app.project.tracks.find(t => t.id === app.selectedTrackId); if (tr) deleteLayer(tr); }
+    return;
+  }
   if (k === 'v') { setTool('move'); return; }
+  if (k === 'n') { addLayer(); return; }
   if (k === 'c') { setTool('cut'); return; }
   if (e.key === 'Escape') { app.selectClip(app.selectedTrackId, null); return; }
   if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
@@ -869,16 +892,32 @@ for (const [id, key] of [['atKey', 'key'], ['atScale', 'scale'], ['atSpeed', 'sp
 }
 $('atApply').addEventListener('click', () => applyAutotune(dlgTrack));
 
-$('tdDelete').addEventListener('click', () => {
-  const tr = dlgTrack;
+$('tdDelete').addEventListener('click', () => { const tr = dlgTrack; $('trackDialog').close(); deleteLayer(tr); });
+
+function deleteLayer(tr) {
+  if (app.recording) return;
   if (app.engine.isRunning) app.engine.stop();
   const before = app.snapshot();
   app.project.tracks = app.project.tracks.filter(t => t !== tr);
   if (app.selectedTrackId === tr.id) { app.selectedTrackId = null; app.selectedClipId = null; }
-  $('trackDialog').close();
   app.commit(before);
-  toast(`${tr.name} deleted. Undo brings it back.`);
-});
+  toast(`${tr.name} deleted.`, false, 6000, { label: 'Undo', fn: () => app.undo() });
+}
+
+function addLayer() {
+  if (app.recording) return;
+  const before = app.snapshot();
+  const tr = makeTrack({ name: nextLayerName() });
+  // add it right under the selected layer, or at the bottom
+  const i = app.project.tracks.findIndex(t => t.id === app.selectedTrackId);
+  if (i >= 0) app.project.tracks.splice(i + 1, 0, tr); else app.project.tracks.push(tr);
+  app.selectedTrackId = tr.id;
+  app.selectedClipId = null;
+  app.commit(before);
+  timeline.scrollToRow(app.project.tracks.indexOf(tr));
+  toast(`${tr.name} added. Press REC to record into it, or paste or drag a clip onto it.`, false, 4000);
+}
+$('btnAddLayer').addEventListener('click', addLayer);
 $('tdDuplicate').addEventListener('click', () => {
   const tr = dlgTrack;
   const before = app.snapshot();
