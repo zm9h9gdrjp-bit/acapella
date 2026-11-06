@@ -41,6 +41,7 @@ export const db = {
   // audio: { id, sampleRate, channels: Float32Array[] }
   saveAudio: (a) => tx('audio', 'readwrite', s => s.put(a)),
   getAudio: (id) => tx('audio', 'readonly', s => s.get(id)),
+  listAudioIds: () => tx('audio', 'readonly', s => s.getAllKeys()),
   deleteAudio: (id) => tx('audio', 'readwrite', s => s.delete(id)),
 };
 

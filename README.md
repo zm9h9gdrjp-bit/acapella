@@ -10,6 +10,13 @@ Everything stays **on your device** (in the browser's IndexedDB). There are no a
 - **Metronome / click.** It goes straight to your headphones and is never recorded or exported. You can set its volume, use a 1–2 bar count-in, and see a live **bar · beat** counter with beat dots.
 - **Tempo and time signature.** Set the BPM with ±, by typing, or with **Tap** tempo. Time signatures from 2/4 to 7/8.
 - **Timeline with bars and beats.** Tap to move the playhead, drag clips to move them, and drag clip edges to trim. **Snap** locks edits to the beat. Use Zoom ± (or Ctrl/⌘ + scroll).
+- **Edit tools** (toolbar above the layers):
+  - **Move** (V): drag a clip left or right, or up and down onto another layer. Drop it below the last layer to give it a new layer of its own. Drag a clip's edge to trim it.
+  - **Cut** (C): scissors. Tap a clip where you want to split it (it snaps to the beat when Snap is on).
+  - **Copy / Paste** (Ctrl/⌘+C, Ctrl/⌘+V): paste goes on the selected layer at the playhead, and the playhead jumps to the end of the paste so pressing Paste again lines the next copy up behind it.
+  - **Repeat**: play the selected clip 2×, 4×, 8× or 16×, or fill it to the end of a chosen bar. Record one bar of drums, cut it on the bar lines, and fill the whole song.
+  - **Delete** (Delete key), **Undo / Redo** (Ctrl/⌘+Z, Ctrl/⌘+Shift+Z). Deleting a whole layer can be undone too.
+  - A clip dropped on top of another clip on the same layer replaces the part underneath.
 - **Loop a section.** Turn on **LOOP**, then drag the yellow loop bar above the bar numbers: drag an end to resize it, or the middle to move it. Or tap **Bars 1–4** to set *From bar / To bar* with −/+ buttons, or to loop 1, 2, 4 or 8 bars from the playhead. Tapping the bar numbers only moves the playhead. Recording in loop mode punch-records exactly one pass.
 - **Layers window.** Only the layers scroll. Drag the handle under the controls to make the layers window bigger or smaller; tap it to fold the controls away.
 - **Auto-tune (per layer).** Pick a key and scale (major, minor or chromatic) and a **Speed** from *Natural* to *Robotic*, plus an **Amount**. It runs on-device: YIN pitch detection plus PSOLA pitch shifting in a Web Worker. The original take is always kept, so you can switch auto-tune on and off to compare.
@@ -45,6 +52,7 @@ To use it on phones, host the folder on any static HTTPS host, such as **GitHub 
 
 ```bash
 node tests/autotune.test.mjs            # DSP: pitch correction accuracy, level, silence
+node tests/clips.test.mjs               # cut / overwrite / repeat rules, old-song upgrade
 python3 -m http.server 8765 &           # then the browser end-to-end test (needs Playwright):
 node tests/e2e.cjs /tmp /path/to/voice.wav
 ```
@@ -56,6 +64,7 @@ node tests/e2e.cjs /tmp /path/to/voice.wav
 | `js/main.js` | UI wiring, songs, recording flow, dialogs |
 | `js/audio-engine.js` | Web Audio transport, metronome, playback, recording, export, latency calibration |
 | `js/recorder-worklet.js` | Sample-accurate mic capture (AudioWorklet) |
+| `js/clips.js` | Clip rules: cut, overwrite, repeat, upgrading old songs |
 | `js/timeline.js` | Canvas ruler/lanes, waveforms, drag to move/trim, loop selection |
 | `js/autotune.js` | YIN pitch tracking + TD-PSOLA pitch correction |
 | `js/autotune-worker.js` | Runs auto-tune off the main thread |

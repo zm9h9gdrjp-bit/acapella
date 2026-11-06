@@ -13,7 +13,7 @@ const WAV = process.argv[2];
   const n = () => p.evaluate(() => window.__app.project.tracks.length);
   const lastPeak = () => p.evaluate(() => {
     const a = window.__app, tr = a.project.tracks[a.project.tracks.length - 1];
-    const d = a.engine.buffers.get(tr.clip.audioId).getChannelData(0);
+    const d = a.engine.buffers.get(tr.clips[0].audioId).getChannelData(0);
     let m = 0; for (let i = 0; i < d.length; i++) m = Math.max(m, Math.abs(d[i])); return m;
   });
   async function take(ms = 5000) {

@@ -4,6 +4,7 @@ import { db, uid, requestPersistence } from './storage.js';
 import { encodeWav } from './wav.js';
 import { NOTE_NAMES } from './autotune.js';
 import { displayColor, applyTheme, onThemeChange } from './theme.js';
+import { migrateProject, placeClip, splitClip, repeatClip, findClip, clipStart, clipEnd, clipLen, referencedAudio, sortClips } from './clips.js';
 
 const $ = (id) => document.getElementById(id);
 // marker-ink colours, picked by hand to sit on cream paper
@@ -34,8 +35,73 @@ const app = {
   playStart: 0,
   recording: false,
   selectedTrackId: null,
+  selectedClipId: null,
+  tool: 'move',          // 'move' | 'cut'
+  clipboard: null,       // { clip, fromTrackId }
+  undoStack: [],
+  redoStack: [],
   settings: loadSettings(),
   saveTimer: null,
+
+  // ----- undo: whole-layer snapshots taken before each edit -----
+  snapshot() { return structuredClone(this.project.tracks); },
+  commit(before) {
+    this.undoStack.push(before);
+    if (this.undoStack.length > 60) this.undoStack.shift();
+    this.redoStack.length = 0;
+    afterEdit();
+  },
+  undo() {
+    if (!this.undoStack.length || this.recording) return;
+    this.redoStack.push(this.snapshot());
+    this.project.tracks = this.undoStack.pop();
+    afterEdit(true);
+  },
+  redo() {
+    if (!this.redoStack.length || this.recording) return;
+    this.undoStack.push(this.snapshot());
+    this.project.tracks = this.redoStack.pop();
+    afterEdit(true);
+  },
+
+  // ----- selection -----
+  selectClip(trackId, clipId) {
+    this.selectedClipId = clipId;
+    this.selectTrack(trackId);
+    renderToolbar();
+  },
+
+  // ----- clip edits (each one undoable) -----
+  cutClip(track, clip, t) {
+    const before = this.snapshot();
+    const right = splitClip(track, clip, t, uid);
+    if (!right) return;
+    this.selectedClipId = right.id;
+    this.selectedTrackId = track.id;
+    this.commit(before);
+  },
+  moveClip(fromTrack, clip, targetRow, targetStart, before) {
+    const p = this.project;
+    let dest = p.tracks[targetRow];
+    if (!dest) {
+      // dropped below the last layer: give it a layer of its own
+      dest = makeTrack({ name: nextLayerName(), clips: [] });
+      dest.autotune = structuredClone(fromTrack.autotune);
+      dest.volume = fromTrack.volume; dest.pan = fromTrack.pan; dest.reverb = fromTrack.reverb;
+      p.tracks.push(dest);
+    }
+    fromTrack.clips = fromTrack.clips.filter(c => c !== clip);
+    clip.offset = targetStart - clip.trimStart;
+    placeClip(dest, clip, uid);
+    this.selectedClipId = clip.id;
+    this.selectedTrackId = dest.id;
+    if (dest !== fromTrack) ensureTuned(dest);
+    this.commit(before);
+  },
+  trimClip(track, clip, before) {
+    placeClip(track, clip, uid); // trimming over a neighbour overwrites it
+    this.commit(before);
+  },
 
   saveSoon() {
     clearTimeout(this.saveTimer);
@@ -103,16 +169,15 @@ function toast(msg, isError = false, ms = 3200) {
 // ---------- project loading ----------
 async function loadProject(p) {
   if (app.engine.isRunning) app.engine.stop();
+  migrateProject(p, uid);
   app.project = p;
   app.playhead = 0;
   app.selectedTrackId = null;
+  app.selectedClipId = null;
+  app.undoStack = []; app.redoStack = [];
   timeline.peaks.clear();
   try { localStorage.setItem(LAST_PROJECT_KEY, p.id); } catch { /* */ }
-  const ids = new Set();
-  for (const tr of p.tracks) {
-    ids.add(tr.clip.audioId);
-    if (tr.autotune && tr.autotune.processedAudioId) ids.add(tr.autotune.processedAudioId);
-  }
+  const ids = referencedAudio(p);
   for (const id of ids) {
     if (app.engine.buffers.has(id)) continue;
     const rec = await db.getAudio(id);
@@ -134,6 +199,7 @@ async function createProject() {
 function renderAll() {
   renderTransport();
   renderHeaders();
+  renderToolbar();
   timeline.selectedTrackId = app.selectedTrackId;
   timeline.invalidate();
   updateCounter(app.playhead);
@@ -162,6 +228,7 @@ function renderTransport() {
   $('playLabel').textContent = running ? 'Stop' : 'Play';
   $('btnRecord').classList.toggle('recording', app.recording);
   for (const id of ['bpm', 'bpmUp', 'bpmDown', 'btnTap', 'timeSig', 'countIn']) $(id).disabled = app.recording;
+  renderToolbar();
 }
 
 function renderHeaders() {
@@ -172,7 +239,7 @@ function renderHeaders() {
     const el = document.createElement('div');
     el.className = 'track-header' + (tr.id === app.selectedTrackId ? ' selected' : '');
     el.dataset.id = tr.id;
-    const tuned = tr.autotune && tr.autotune.enabled && tr.autotune.processedAudioId;
+    const tuned = tr.autotune && tr.autotune.enabled && Object.keys(tr.autotune.processed || {}).length > 0;
     el.innerHTML = `
       <div class="swatch" style="background:${displayColor(tr.color)}"></div>
       <div>
@@ -189,7 +256,7 @@ function renderHeaders() {
       </div>`;
     el.addEventListener('click', (e) => {
       if (e.target.closest('button, input')) return;
-      app.selectTrack(tr.id);
+      app.selectClip(tr.id, null);
     });
     el.querySelector('.th-name').addEventListener('dblclick', () => openTrackDialog(tr));
     el.querySelector('.th-gear').addEventListener('click', () => { app.selectTrack(tr.id); openTrackDialog(tr); });
@@ -375,17 +442,14 @@ async function saveTake(projectId, samples, info) {
     return;
   }
   app.engine.setBufferFromRecord(audio);
-  const n = p.tracks.filter(t => !t.isReference).length + 1;
-  const tr = makeTrack({
-    name: `Layer ${n}`,
-    clip: { audioId: audio.id, offset: info.startTl, trimStart, trimEnd },
-  });
+  const before = app.snapshot();
+  const clip = { id: uid(), audioId: audio.id, offset: info.startTl, trimStart, trimEnd };
+  const tr = makeTrack({ name: nextLayerName(), clips: [clip] });
   p.tracks.push(tr);
   app.selectedTrackId = tr.id;
-  renderHeaders();
-  app.selectTrack(tr.id);
+  app.selectedClipId = clip.id;
+  app.commit(before);
   timeline.scrollToRow(p.tracks.length - 1);
-  await app.saveNow();
   toast(`${tr.name} saved.`);
 }
 
@@ -400,7 +464,14 @@ async function openMic() {
   return res;
 }
 
-function makeTrack({ name, clip, isReference = false }) {
+function nextLayerName() {
+  const used = new Set(app.project.tracks.map(t => t.name));
+  let n = app.project.tracks.filter(t => !t.isReference).length + 1;
+  while (used.has(`Layer ${n}`)) n++;
+  return `Layer ${n}`;
+}
+
+function makeTrack({ name, clips = [], isReference = false }) {
   const used = new Set(app.project.tracks.map(t => t.color));
   const color = COLORS.find(c => !used.has(c)) || COLORS[app.project.tracks.length % COLORS.length];
   return {
@@ -408,8 +479,8 @@ function makeTrack({ name, clip, isReference = false }) {
     volume: isReference ? 0.7 : 1, pan: 0, reverb: isReference ? 0 : 0.2,
     mute: false, solo: false,
     isReference, includeInExport: false,
-    clip,
-    autotune: { enabled: false, key: 0, scale: 'major', speed: 60, amount: 100, processedAudioId: null, appliedParams: null },
+    clips,
+    autotune: { enabled: false, key: 0, scale: 'major', speed: 60, amount: 100, processed: {}, appliedParams: null },
   };
 }
 
@@ -483,6 +554,18 @@ $('projectName').addEventListener('change', (e) => {
 
 document.addEventListener('keydown', (e) => {
   if (e.target.closest('input, select, textarea') || document.querySelector('dialog[open]')) return;
+  const mod = e.ctrlKey || e.metaKey;
+  const k = e.key.toLowerCase();
+  if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? app.redo() : app.undo(); return; }
+  if (mod && k === 'y') { e.preventDefault(); app.redo(); return; }
+  if (mod && k === 'c') { e.preventDefault(); copyClip(); return; }
+  if (mod && k === 'v') { e.preventDefault(); pasteClip(); return; }
+  if (mod && k === 'd') { e.preventDefault(); doRepeat({ times: 2 }); return; }
+  if (mod) return;
+  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteClip(); return; }
+  if (k === 'v') { setTool('move'); return; }
+  if (k === 'c') { setTool('cut'); return; }
+  if (e.key === 'Escape') { app.selectClip(app.selectedTrackId, null); return; }
   if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
   else if (e.key === 'r' || e.key === 'R') { e.preventDefault(); toggleRecord(); }
   else if (e.key === 'Home') { app.seek(0); timeline.scroller.scrollLeft = 0; }
@@ -495,6 +578,133 @@ app.engine.onLevel = (peak) => {
   const pct = Math.max(0, Math.min(100, (db + 60) / 60 * 100));
   $('meterFill').style.height = pct + '%';
 };
+
+// ---------- edit tools ----------
+function selectedClip() {
+  if (!app.selectedClipId) return null;
+  return findClip(app.project, app.selectedClipId);
+}
+
+/** Everything that has to happen after any edit or undo/redo. */
+function afterEdit(fromHistory = false) {
+  const p = app.project;
+  if (app.selectedClipId && !findClip(p, app.selectedClipId)) app.selectedClipId = null;
+  if (app.selectedTrackId && !p.tracks.some(t => t.id === app.selectedTrackId)) app.selectedTrackId = null;
+  if (fromHistory && dlgTrack) $('trackDialog').close();
+  renderHeaders();
+  timeline.selectedTrackId = app.selectedTrackId;
+  document.querySelectorAll('.track-header').forEach(el => el.classList.toggle('selected', el.dataset.id === app.selectedTrackId));
+  renderToolbar();
+  timeline.invalidate();
+  app.saveSoon();
+  restartIfPlaying();
+}
+
+function renderToolbar() {
+  if (!app.project) return;
+  const busy = app.recording;
+  document.querySelectorAll('#toolbar [data-tool]').forEach(b => {
+    b.setAttribute('aria-pressed', String(b.dataset.tool === app.tool));
+  });
+  const sel = !!selectedClip();
+  $('actCopy').disabled = busy || !sel;
+  $('actRepeat').disabled = busy || !sel;
+  $('actDelete').disabled = busy || !sel;
+  $('actPaste').disabled = busy || !app.clipboard;
+  $('actUndo').disabled = busy || !app.undoStack.length;
+  $('actRedo').disabled = busy || !app.redoStack.length;
+}
+
+function setTool(t) {
+  app.tool = t;
+  timeline.hover = null;
+  renderToolbar();
+  timeline.invalidate();
+  if (t === 'cut') toast('Scissors: tap a clip where you want to cut it.', false, 2500);
+}
+
+function copyClip() {
+  const f = selectedClip();
+  if (!f) return;
+  app.clipboard = { clip: { ...f.clip }, trackId: f.track.id };
+  renderToolbar();
+  toast('Copied. Move the playhead and press Paste.', false, 2500);
+}
+
+function pasteClip() {
+  const cb = app.clipboard;
+  if (!cb || app.recording) return;
+  if (app.engine.isRunning) app.engine.stop();
+  const p = app.project;
+  const before = app.snapshot();
+  let dest = p.tracks.find(t => t.id === app.selectedTrackId) || p.tracks.find(t => t.id === cb.trackId);
+  if (!dest) { dest = makeTrack({ name: nextLayerName() }); p.tracks.push(dest); }
+  const start = app.project.snap ? timeline.snapTime(app.playhead) : app.playhead;
+  const clip = { ...cb.clip, id: uid(), offset: start - cb.clip.trimStart };
+  placeClip(dest, clip, uid);
+  app.selectedClipId = clip.id;
+  app.selectedTrackId = dest.id;
+  ensureTuned(dest);
+  // playhead jumps to the end of the paste, so pressing Paste again lines the next copy up behind it
+  app.seek(clipEnd(clip));
+  timeline.scrollToTime(app.playhead);
+  app.commit(before);
+}
+
+function deleteClip() {
+  const f = selectedClip();
+  if (!f || app.recording) return;
+  const before = app.snapshot();
+  f.track.clips = f.track.clips.filter(c => c !== f.clip);
+  app.selectedClipId = null;
+  app.commit(before);
+}
+
+function doRepeat(opts) {
+  const f = selectedClip();
+  if (!f) return;
+  if (app.engine.isRunning) app.engine.stop();
+  const before = app.snapshot();
+  const added = repeatClip(f.track, f.clip, opts, uid);
+  if (!added.length) { toast('Nothing to add there.'); return; }
+  app.selectedClipId = f.clip.id;
+  app.commit(before);
+  $('repeatDialog').close();
+  toast(`Added ${added.length} cop${added.length === 1 ? 'y' : 'ies'}.`);
+}
+
+let fillBar = 8;
+function openRepeat() {
+  const f = selectedClip();
+  if (!f) return;
+  const p = app.project, barDur = 60 / p.bpm * p.beatsPerBar;
+  const len = clipLen(f.clip);
+  const bars = len / barDur;
+  $('repeatInfo').textContent = `This clip is ${Math.abs(bars - Math.round(bars)) < 0.02 ? Math.round(bars) + ' bar' + (Math.round(bars) === 1 ? '' : 's') : len.toFixed(2) + ' s'} long.`;
+  // sensible default: end of the loop, else end of the song, else 8 bars on
+  let end = 0;
+  for (const t of p.tracks) for (const c of t.clips) end = Math.max(end, clipEnd(c));
+  const clipEndBar = Math.ceil(clipEnd(f.clip) / barDur - 1e-6);
+  fillBar = p.loop.enabled ? p.loop.endBar - 1 : Math.max(clipEndBar + 1, Math.ceil(end / barDur - 1e-6), clipEndBar + 7);
+  $('fillBar').textContent = fillBar;
+  $('repeatDialog').showModal();
+}
+document.querySelectorAll('#repeatDialog [data-times]').forEach(b => b.addEventListener('click', () => doRepeat({ times: +b.dataset.times })));
+document.querySelectorAll('#repeatDialog [data-fill-step]').forEach(b => b.addEventListener('click', () => {
+  fillBar = Math.max(1, fillBar + +b.dataset.fillStep); $('fillBar').textContent = fillBar;
+}));
+$('btnFill').addEventListener('click', () => {
+  const p = app.project, barDur = 60 / p.bpm * p.beatsPerBar;
+  doRepeat({ until: fillBar * barDur });
+});
+
+document.querySelectorAll('#toolbar [data-tool]').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
+$('actCopy').addEventListener('click', copyClip);
+$('actPaste').addEventListener('click', pasteClip);
+$('actRepeat').addEventListener('click', openRepeat);
+$('actDelete').addEventListener('click', deleteClip);
+$('actUndo').addEventListener('click', () => app.undo());
+$('actRedo').addEventListener('click', () => app.redo());
 
 // ---------- loop dialog (bar steppers) ----------
 function loopDialogOpen() { return $('loopDialog').open; }
@@ -619,11 +829,11 @@ function updateAtStatus() {
   const tr = dlgTrack;
   if (!tr) return;
   const a = tr.autotune;
-  const busy = atJobs.has(tr.id);
+  const busy = atBusy.has(tr.id);
   $('atApply').disabled = busy;
   let s;
   if (busy) s = 'Working…';
-  else if (!a.processedAudioId) s = 'Not applied yet.';
+  else if (!Object.keys(a.processed || {}).length) s = 'Not applied yet.';
   else if (sameParams(a.appliedParams, atParams(tr))) s = a.enabled ? 'Applied and on.' : 'Applied, but switched off (you’re hearing the original).';
   else s = 'Settings changed. Press Apply to hear them.';
   $('atStatus').textContent = s;
@@ -645,7 +855,7 @@ $('tdIncludeExport').addEventListener('change', (e) => { dlgTrack.includeInExpor
 $('atEnabled').addEventListener('change', (e) => {
   const tr = dlgTrack;
   tr.autotune.enabled = e.target.checked;
-  if (e.target.checked && (!tr.autotune.processedAudioId || !sameParams(tr.autotune.appliedParams, atParams(tr)))) {
+  if (e.target.checked && (needsTuning(tr) || !sameParams(tr.autotune.appliedParams, atParams(tr)))) {
     applyAutotune(tr);
   }
   restartIfPlaying();
@@ -659,43 +869,47 @@ for (const [id, key] of [['atKey', 'key'], ['atScale', 'scale'], ['atSpeed', 'sp
 }
 $('atApply').addEventListener('click', () => applyAutotune(dlgTrack));
 
-$('tdDelete').addEventListener('click', async () => {
+$('tdDelete').addEventListener('click', () => {
   const tr = dlgTrack;
-  if (!confirm(`Delete “${tr.name}”? This can’t be undone.`)) return;
   if (app.engine.isRunning) app.engine.stop();
+  const before = app.snapshot();
   app.project.tracks = app.project.tracks.filter(t => t !== tr);
-  await deleteAudioIfUnused(tr.clip.audioId);
-  if (tr.autotune.processedAudioId) await deleteAudioIfUnused(tr.autotune.processedAudioId);
+  if (app.selectedTrackId === tr.id) { app.selectedTrackId = null; app.selectedClipId = null; }
   $('trackDialog').close();
-  renderHeaders(); await app.saveNow();
+  app.commit(before);
+  toast(`${tr.name} deleted. Undo brings it back.`);
 });
-$('tdDuplicate').addEventListener('click', async () => {
+$('tdDuplicate').addEventListener('click', () => {
   const tr = dlgTrack;
+  const before = app.snapshot();
   const copy = structuredClone(tr);
   copy.id = uid();
   copy.name = tr.name + ' copy';
+  copy.clips = copy.clips.map(c => ({ ...c, id: uid() }));
   const used = new Set(app.project.tracks.map(t => t.color));
   copy.color = COLORS.find(c => !used.has(c)) || tr.color;
   app.project.tracks.splice(app.project.tracks.indexOf(tr) + 1, 0, copy);
   $('trackDialog').close();
-  renderHeaders(); app.selectTrack(copy.id); await app.saveNow();
+  app.selectedTrackId = copy.id; app.selectedClipId = null;
+  app.commit(before);
   toast('Copied. Pan one left and one right for a wider sound.');
 });
 
-async function deleteAudioIfUnused(id) {
-  if (!id) return;
-  const projects = await db.listProjects();
-  const live = [app.project, ...projects.filter(p => p.id !== app.project.id)];
-  const used = live.some(p => p.tracks.some(t => t.clip.audioId === id || (t.autotune && t.autotune.processedAudioId === id)));
-  if (!used) {
-    await db.deleteAudio(id);
-    app.engine.buffers.delete(id);
-    timeline.peaks.delete(id);
-  }
+/** Remove stored audio no song uses any more (after deletes, re-tunes, undo history is gone). */
+async function collectGarbage() {
+  try {
+    const used = new Set();
+    for (const p of await db.listProjects()) referencedAudio(p, used);
+    if (app.project) referencedAudio(app.project, used);
+    for (const id of await db.listAudioIds()) {
+      if (!used.has(id)) { await db.deleteAudio(id); app.engine.buffers.delete(id); timeline.peaks.delete(id); }
+    }
+  } catch { /* best effort */ }
 }
 
 // ---------- auto-tune worker ----------
 const atJobs = new Map();
+const atBusy = new Set();
 let atWorker = null;
 let atJobSeq = 0;
 function getWorker() {
@@ -706,7 +920,7 @@ function getWorker() {
       for (const [trackId, job] of atJobs) {
         if (job.id !== m.id) continue;
         if (m.progress != null) {
-          if (dlgTrack && dlgTrack.id === trackId) { $('atProgress').hidden = false; $('atProgress').value = m.progress; }
+          job.onProgress && job.onProgress(m.progress);
         } else if (m.error) {
           atJobs.delete(trackId); job.reject(new Error(m.error));
         } else if (m.done) {
@@ -718,40 +932,66 @@ function getWorker() {
   return atWorker;
 }
 
-async function applyAutotune(tr) {
-  if (atJobs.has(tr.id)) return;
-  const raw = app.engine.buffers.get(tr.clip.audioId);
-  if (!raw) { toast('Audio for this layer is missing.', true); return; }
-  const params = atParams(tr);
+/** Raw audio ids on this layer that have no tuned version for the current settings. */
+function needsTuning(tr) {
+  const ids = [...new Set(tr.clips.map(c => c.audioId))];
+  return ids.filter(id => !(tr.autotune.processed || {})[id]);
+}
+
+/** A clip landed on a tuned layer: tune its audio too, quietly in the background. */
+function ensureTuned(tr) {
+  const a = tr.autotune;
+  if (a && a.enabled && a.appliedParams && needsTuning(tr).length) applyAutotune(tr, { onlyMissing: true });
+}
+
+function runWorker(trackId, raw, params, onProgress) {
   const channels = [];
   for (let c = 0; c < raw.numberOfChannels; c++) channels.push(raw.getChannelData(c).slice());
-  const project = app.project;
-  const job = { id: ++atJobSeq };
+  const job = { id: ++atJobSeq, onProgress };
   const done = new Promise((resolve, reject) => { job.resolve = resolve; job.reject = reject; });
-  atJobs.set(tr.id, job);
-  updateAtStatus();
-  $('atProgress').hidden = false; $('atProgress').value = 0;
+  atJobs.set(trackId, job);
   getWorker().postMessage({ id: job.id, channels, sampleRate: raw.sampleRate, params }, channels.map(c => c.buffer));
+  return done;
+}
+
+async function applyAutotune(tr, { onlyMissing = false } = {}) {
+  if (atBusy.has(tr.id)) return;
+  const a = tr.autotune;
+  const params = onlyMissing && a.appliedParams ? a.appliedParams : atParams(tr);
+  const fresh = !onlyMissing && !sameParams(a.appliedParams, params);
+  const ids = fresh ? [...new Set(tr.clips.map(c => c.audioId))] : needsTuning(tr);
+  if (!ids.length) { a.enabled = true; a.appliedParams = params; afterEdit(); return; }
+  const project = app.project;
+  atBusy.add(tr.id);
+  updateAtStatus();
+  if (dlgTrack === tr) { $('atProgress').hidden = false; $('atProgress').value = 0; }
   try {
-    const out = await done;
-    const audio = { id: uid(), sampleRate: raw.sampleRate, channels: out };
-    await db.saveAudio(audio);
-    app.engine.setBufferFromRecord(audio);
-    const old = tr.autotune.processedAudioId;
-    tr.autotune.processedAudioId = audio.id;
-    tr.autotune.appliedParams = params;
-    tr.autotune.enabled = true;
-    if (old) await deleteAudioIfUnused(old);
+    const processed = fresh ? {} : { ...(a.processed || {}) };
+    for (let i = 0; i < ids.length; i++) {
+      const raw = app.engine.buffers.get(ids[i]);
+      if (!raw) continue;
+      const out = await runWorker(tr.id, raw, params, (pr) => {
+        if (dlgTrack === tr) { $('atProgress').hidden = false; $('atProgress').value = (i + pr) / ids.length; }
+      });
+      const audio = { id: uid(), sampleRate: raw.sampleRate, channels: out };
+      await db.saveAudio(audio);
+      app.engine.setBufferFromRecord(audio);
+      processed[ids[i]] = audio.id;
+    }
+    a.processed = processed;
+    a.appliedParams = params;
+    a.enabled = true;
     if (app.project === project) {
       await app.saveNow();
       restartIfPlaying();
     } else {
       await db.saveProject(project);
     }
-    toast(`${tr.name}: auto-tune done.`);
+    if (!onlyMissing) toast(`${tr.name}: auto-tune done.`);
   } catch (e) {
     toast('Auto-tune failed: ' + e.message, true);
   } finally {
+    atBusy.delete(tr.id);
     if (dlgTrack === tr) { $('atProgress').hidden = true; $('atEnabled').checked = tr.autotune.enabled; updateAtStatus(); }
     renderHeaders();
     timeline.invalidate();
@@ -772,13 +1012,15 @@ $('fileImport').addEventListener('change', async (e) => {
     const audio = { id: uid(), sampleRate: buf.sampleRate, channels };
     await db.saveAudio(audio);
     app.engine.setBufferFromRecord(audio);
+    const before = app.snapshot();
     const tr = makeTrack({
       name: file.name.replace(/\.[^.]+$/, ''),
-      clip: { audioId: audio.id, offset: 0, trimStart: 0, trimEnd: buf.duration },
+      clips: [{ id: uid(), audioId: audio.id, offset: 0, trimStart: 0, trimEnd: buf.duration }],
       isReference: true,
     });
     app.project.tracks.unshift(tr);
-    renderHeaders(); app.selectTrack(tr.id); await app.saveNow();
+    app.selectedTrackId = tr.id; app.selectedClipId = null;
+    app.commit(before);
     toast('Added as a reference. It stays out of exports unless you tick it.', false, 4500);
   } catch (err) {
     toast('Could not import that file: ' + (err.message || err), true, 6000);
@@ -824,18 +1066,15 @@ async function renderProjectList() {
     const layers = p.tracks.filter(t => !t.isReference).length;
     li.innerHTML = `<div class="pl-name"><strong>${escapeHtml(p.name)}</strong><span class="muted small">${layers} layer${layers === 1 ? '' : 's'} · ${p.bpm} BPM · ${new Date(p.updatedAt).toLocaleDateString()}</span></div>
       <button type="button" class="btn sm open">Open</button><button type="button" class="btn sm danger del" aria-label="Delete">Delete</button>`;
-    li.querySelector('.open').addEventListener('click', async () => { $('projectsDialog').close(); await loadProject(p); });
+    li.querySelector('.open').addEventListener('click', async () => { $('projectsDialog').close(); await loadProject(migrateProject(p, uid)); });
     li.querySelector('.del').addEventListener('click', async () => {
       if (!confirm(`Delete the song “${p.name}” and all its recordings? This can’t be undone.`)) return;
       await db.deleteProject(p.id);
-      for (const t of p.tracks) {
-        await db.deleteAudio(t.clip.audioId);
-        if (t.autotune && t.autotune.processedAudioId) await db.deleteAudio(t.autotune.processedAudioId);
-      }
       if (p.id === app.project.id) {
         const rest = (await db.listProjects()).sort((a, b) => b.updatedAt - a.updatedAt);
         if (rest.length) await loadProject(rest[0]); else await createProject();
       }
+      await collectGarbage();
       renderProjectList();
     });
     ul.appendChild(li);
@@ -942,6 +1181,7 @@ async function boot() {
     }
   } catch { /* ignore */ }
   if (p) await loadProject(p); else await createProject();
+  collectGarbage();
   app.engine.setMonitor(app.settings.monitor);
   requestAnimationFrame(frame);
   window.addEventListener('pagehide', () => app.saveNow());
@@ -963,3 +1203,4 @@ boot();
 app.render = renderAll;
 window.__app = app;
 window.__tl = timeline;
+window.__loadProject = loadProject;

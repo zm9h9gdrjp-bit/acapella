@@ -269,6 +269,24 @@ body { display: flex; flex-direction: column; height: 100dvh; }
 .transport-controls { margin-top: 12px; overflow: hidden; position: relative; }
 .transport-controls.folding { transition: max-height .18s ease, margin-top .18s ease; }
 
+.toolbar {
+  flex: none; display: flex; gap: 10px; align-items: stretch; padding: 6px 10px; overflow-x: auto;
+  background: var(--panel); border-bottom: 1px solid var(--border); scrollbar-width: none;
+}
+.toolbar::-webkit-scrollbar { display: none; }
+.tool-group { display: flex; flex: none; border: 1px solid var(--strong); border-radius: 3px; overflow: hidden; background: var(--strong); gap: 1px; }
+.tool {
+  flex: none; min-width: 52px; padding: 5px 6px 4px; border: none; background: var(--panel); cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 2px; color: var(--text);
+  font-family: var(--label); font-weight: 700; font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+  box-shadow: inset 0 -3px 0 var(--panel-2);
+}
+.tool svg { display: block; }
+.tool:active { box-shadow: inset 0 2px 0 var(--key-press); background: var(--panel-2); }
+.tool[aria-pressed="true"] { background: var(--ink); color: var(--panel); box-shadow: none; }
+.tool:disabled { color: var(--led-off); cursor: default; box-shadow: inset 0 -3px 0 var(--panel-2); background: var(--panel); }
+@media (max-width: 640px) { .toolbar { gap: 6px; padding: 5px 8px; } .tool { min-width: 44px; padding: 4px 3px 3px; font-size: 10px; letter-spacing: .06em; } }
+
 .splitter {
   height: 18px; display: grid; place-items: center; cursor: row-resize; touch-action: none;
   background: var(--panel); border-bottom: 1px solid var(--border);

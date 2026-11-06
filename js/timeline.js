@@ -4,6 +4,7 @@
 //    bottom part  = bar numbers; tap or drag here only moves the playhead
 //  Lanes (scroll horizontally AND vertically): waveforms, clip move/trim, playhead.
 import { displayColor } from './theme.js';
+import { clipStart, clipEnd } from './clips.js';
 
 export const ROW_H = 76;
 export const STRIP_H = 24;
@@ -26,7 +27,7 @@ export class Timeline {
     this.peaks = new Map();
     this.playhead = 0;
     this.drag = null;
-    this.selectedTrackId = null;
+    this.hover = null;
     this.recording = null; // { row, from, to, newRow }
     this.dirty = true;
 
@@ -58,6 +59,7 @@ export class Timeline {
       el.addEventListener('pointermove', (e) => this.onMove(e, kind));
       el.addEventListener('pointerup', (e) => this.onUp(e, kind));
       el.addEventListener('pointercancel', () => { this.drag = null; this.invalidate(); });
+      el.addEventListener('pointerleave', () => { if (this.hover) { this.hover = null; this.invalidate(); } });
     }
     const loop = () => { if (this.dirty) this.draw(); requestAnimationFrame(loop); };
     requestAnimationFrame(loop);
@@ -83,14 +85,15 @@ export class Timeline {
   totalDuration() {
     const p = this.project;
     let end = 0;
-    for (const tr of p.tracks) end = Math.max(end, tr.clip.offset + tr.clip.trimEnd);
+    for (const tr of p.tracks) for (const c of tr.clips) end = Math.max(end, clipEnd(c));
     if (this.recording) end = Math.max(end, this.recording.to);
     if (p.loop) end = Math.max(end, (p.loop.endBar - 1) * this.barDur);
     return Math.max(end + this.barDur * 8, this.barDur * 32, this.playhead + this.barDur * 4);
   }
 
   rowCount() {
-    return this.project.tracks.length + (this.recording && this.recording.newRow ? 1 : 0);
+    const extra = (this.recording && this.recording.newRow) || (this.drag && this.drag.mode === 'move' && this.drag.moved) ? 1 : 0;
+    return this.project.tracks.length + extra;
   }
 
   updateSize() {
@@ -251,17 +254,46 @@ export class Timeline {
         g.fillStyle = col('--loop-lane');
         g.fillRect(x0, 0, x1 - x0, h);
       }
+      const d = this.drag;
+      const moving = d && d.mode === 'move' && d.moved ? d : null;
       p.tracks.forEach((tr, row) => {
         const y = this.rowY(row);
         if (y > h || y + ROW_H < 0) return;
-        if (tr.id === this.selectedTrackId) {
+        if (tr.id === this.app.selectedTrackId) {
           g.fillStyle = col('--selected-row');
           g.fillRect(0, y, w, ROW_H);
         }
         g.fillStyle = col('--rule');
         g.fillRect(0, y + ROW_H - 1, w, 1);
-        this.drawClip(g, tr, y, w, col);
+        for (const c of tr.clips) {
+          if (moving && c === moving.clip) continue; // drawn at its drop position below
+          this.drawClip(g, tr, c, y, w, col);
+        }
       });
+      if (moving) {
+        // drop preview: the clip where it will land, on the layer it will land in
+        const row = moving.targetRow;
+        const y = this.rowY(row);
+        const isNew = row >= p.tracks.length;
+        if (isNew) {
+          g.fillStyle = col('--selected-row');
+          g.fillRect(0, y, w, ROW_H);
+          g.font = FONT_B; g.textBaseline = 'alphabetic'; g.fillStyle = col('--muted');
+          g.fillText('NEW LAYER', 10, y + ROW_H - 10);
+        }
+        const ghost = { ...moving.clip, offset: moving.targetStart - moving.clip.trimStart };
+        g.save(); g.globalAlpha = 0.85;
+        this.drawClip(g, moving.tr, ghost, y, w, col, { selected: true });
+        g.restore();
+      }
+      // scissors: show where the cut will land
+      const hv = this.hover;
+      if (this.app.tool === 'cut' && hv && hv.clip && !d) {
+        const x = Math.round(this.timeToX(hv.t)) + 0.5, y = this.rowY(hv.row);
+        g.strokeStyle = col('--rec'); g.lineWidth = 2; g.setLineDash([4, 3]);
+        g.beginPath(); g.moveTo(x, y + 3); g.lineTo(x, y + ROW_H - 4); g.stroke();
+        g.setLineDash([]);
+      }
       if (this.recording) {
         const y = this.rowY(this.recording.row);
         const x0 = this.timeToX(this.recording.from), x1 = this.timeToX(this.recording.to);
@@ -280,27 +312,26 @@ export class Timeline {
     }
   }
 
-  drawClip(g, tr, y, w, col) {
+  drawClip(g, tr, c, y, w, col, opts = {}) {
     const color = displayColor(tr.color);
-    const buf = this.app.engine.bufferForTrack(tr);
-    const c = tr.clip;
+    const audioId = this.app.engine.audioIdForClip(tr, c);
+    const buf = this.app.engine.buffers.get(audioId);
     const dur = buf ? buf.duration : c.trimEnd;
-    const vs = c.offset + c.trimStart, ve = c.offset + Math.min(c.trimEnd, dur);
+    const vs = clipStart(c), ve = c.offset + Math.min(c.trimEnd, dur);
     const x0 = this.timeToX(vs), x1 = this.timeToX(ve);
     if (x1 < 0 || x0 > w) return;
     const top = y + 6, hh = ROW_H - 13;
+    const selected = opts.selected || c.id === this.app.selectedClipId;
     const dim = tr.mute || (this.project.tracks.some(t => t.solo) && !tr.solo);
     g.save();
-    g.globalAlpha = dim ? 0.4 : 1;
+    if (dim) g.globalAlpha *= 0.4;
     g.fillStyle = color + (document.documentElement.dataset.resolved === 'dark' ? '33' : '22');
     g.strokeStyle = color;
-    g.lineWidth = tr.id === this.selectedTrackId ? 2 : 1;
-    roundRect(g, x0, top, x1 - x0, hh, 6);
+    g.lineWidth = selected ? 2.5 : 1;
+    roundRect(g, x0, top, x1 - x0, hh, 5);
     g.fill(); g.stroke();
     g.clip();
     if (buf) {
-      const audioId = (tr.autotune && tr.autotune.enabled && tr.autotune.processedAudioId && this.app.engine.buffers.has(tr.autotune.processedAudioId))
-        ? tr.autotune.processedAudioId : c.audioId;
       const pk = this.peaksFor(audioId, buf);
       const mid = top + hh / 2;
       g.fillStyle = color;
@@ -315,15 +346,26 @@ export class Timeline {
         if (a > 0.3) g.fillRect(x, mid - a, 1, a * 2);
       }
     }
+    if (selected) {
+      // selected: a solid tab across the top so it reads at a glance
+      g.fillStyle = color;
+      g.fillRect(x0, top, x1 - x0, 15);
+    }
     g.restore();
-    g.font = '600 11px "Barlow Condensed", "Arial Narrow", sans-serif';
-    g.textBaseline = 'alphabetic';
-    g.fillStyle = col('--text');
-    const label = (tr.isReference ? 'REF · ' : '') + tr.name + (tr.autotune && tr.autotune.enabled && tr.autotune.processedAudioId ? ' · tuned' : '');
-    g.fillText(label, Math.max(x0, 0) + 8, top + 14);
+    if (x1 - x0 > 28) {
+      g.font = '600 11px "Barlow Condensed", "Arial Narrow", sans-serif';
+      g.textBaseline = 'alphabetic';
+      g.fillStyle = selected ? (document.documentElement.dataset.resolved === 'dark' ? '#0b0907' : '#f3eee2') : col('--text');
+      const label = (tr.isReference ? 'REF · ' : '') + tr.name + (audioId !== c.audioId ? ' · tuned' : '');
+      g.save(); g.beginPath(); g.rect(x0, top, x1 - x0 - 4, hh); g.clip();
+      g.fillText(label, Math.max(x0, 0) + 7, top + 12);
+      g.restore();
+    }
+    // trim grips
     g.fillStyle = color;
-    g.fillRect(x0, top + hh / 2 - 10, 3, 20);
-    g.fillRect(x1 - 3, top + hh / 2 - 10, 3, 20);
+    const gh = selected ? 28 : 20;
+    g.fillRect(x0, top + hh / 2 - gh / 2, selected ? 4 : 3, gh);
+    g.fillRect(x1 - (selected ? 4 : 3), top + hh / 2 - gh / 2, selected ? 4 : 3, gh);
   }
 
   // ---------- interaction ----------
@@ -337,19 +379,27 @@ export class Timeline {
   barAt(x) { return Math.max(1, Math.floor(this.xToTime(x) / this.barDur) + 1); }
   nearestBarLine(x) { return Math.max(1, Math.round(this.xToTime(x) / this.barDur) + 1); }
 
+  /** What is under (x, y) in the lanes: row, track, clip and which part of the clip. */
   hitClip(x, y) {
     const row = Math.floor((y + this.scroller.scrollTop) / ROW_H);
     const tr = this.project.tracks[row];
-    if (!tr) return { row, tr: null };
-    const buf = this.app.engine.bufferForTrack(tr);
-    const c = tr.clip;
-    const ve = c.offset + Math.min(c.trimEnd, buf ? buf.duration : c.trimEnd);
-    const x0 = this.timeToX(c.offset + c.trimStart), x1 = this.timeToX(ve);
-    const edge = Math.min(EDGE, (x1 - x0) / 3);
-    if (x >= x0 - 4 && x <= x0 + edge) return { row, tr, mode: 'trimL' };
-    if (x <= x1 + 4 && x >= x1 - edge) return { row, tr, mode: 'trimR' };
-    if (x > x0 && x < x1) return { row, tr, mode: 'move' };
-    return { row, tr, mode: null };
+    if (!tr) return { row, tr: null, clip: null, mode: null };
+    const t = this.xToTime(x);
+    const slop = 6 / this.pps;
+    // prefer the selected clip when edges touch
+    const ordered = [...tr.clips].sort((a, b) => (b.id === this.app.selectedClipId) - (a.id === this.app.selectedClipId));
+    for (const c of ordered) {
+      const buf = this.app.engine.bufferForClip(tr, c);
+      const s = clipStart(c), e = c.offset + Math.min(c.trimEnd, buf ? buf.duration : c.trimEnd);
+      if (t < s - slop || t > e + slop) continue;
+      const x0 = this.timeToX(s), x1 = this.timeToX(e);
+      const edge = Math.min(EDGE, (x1 - x0) / 3);
+      let mode = 'move';
+      if (x <= x0 + edge) mode = 'trimL';
+      else if (x >= x1 - edge) mode = 'trimR';
+      return { row, tr, clip: c, mode };
+    }
+    return { row, tr, clip: null, mode: null };
   }
 
   hitLoop(x) {
@@ -375,13 +425,16 @@ export class Timeline {
       return;
     }
     const hit = this.hitClip(x, y);
-    if (hit.tr && hit.mode && !this.app.engine.isRunning) {
-      this.drag = { kind, mode: hit.mode, tr: hit.tr, startX: x, startY: y, orig: { ...hit.tr.clip }, moved: false };
+    const base = { kind, hit, startX: x, startY: y, moved: false,
+      scroll0: this.scroller.scrollLeft, scrollTop0: this.scroller.scrollTop };
+    const editable = hit.clip && !this.app.engine.isRunning;
+    if (this.app.tool === 'move' && editable) {
+      this.drag = { ...base, mode: hit.mode, tr: hit.tr, clip: hit.clip, orig: { ...hit.clip },
+        snapshot: this.app.snapshot(), targetRow: hit.row, targetStart: clipStart(hit.clip),
+        grabOffset: this.xToTime(x) - clipStart(hit.clip) };
     } else {
-      this.drag = { kind, mode: 'pan', tr: hit.tr, startX: x, startY: y,
-        scroll0: this.scroller.scrollLeft, scrollTop0: this.scroller.scrollTop, moved: false };
+      this.drag = { ...base, mode: 'pan' };
     }
-    if (hit.tr) this.app.selectTrack(hit.tr.id);
   }
 
   onMove(e, kind) {
@@ -391,7 +444,13 @@ export class Timeline {
       let cur = 'default';
       if (kind === 'lanes') {
         const hit = this.hitClip(x, y);
-        cur = !hit.mode ? 'default' : hit.mode === 'move' ? 'grab' : 'ew-resize';
+        if (this.app.tool === 'cut') {
+          cur = hit.clip ? 'crosshair' : 'default';
+          this.hover = hit.clip ? { row: hit.row, clip: hit.clip, t: this.snapTime(this.xToTime(x)) } : null;
+          this.invalidate();
+        } else {
+          cur = !hit.mode ? 'default' : hit.mode === 'move' ? 'grab' : 'ew-resize';
+        }
       } else if (y < STRIP_H) {
         const m = this.hitLoop(x);
         cur = m === 'loopMove' ? 'grab' : m === 'loopNew' ? 'crosshair' : 'ew-resize';
@@ -427,14 +486,20 @@ export class Timeline {
       this.scroller.scrollTop = Math.max(0, d.scrollTop0 - (y - d.startY));
       return;
     }
-    const dt = (x - d.startX) / this.pps;
-    const c = d.tr.clip, o = d.orig;
-    const buf = this.app.engine.bufferForTrack(d.tr);
-    const bufDur = buf ? buf.duration : o.trimEnd;
+    const c = d.clip, o = d.orig;
     if (d.mode === 'move') {
-      const vs = Math.max(0, this.snapTime(o.offset + o.trimStart + dt));
-      c.offset = vs - o.trimStart;
-    } else if (d.mode === 'trimL') {
+      // follow the finger in time (snapped) and across layers; one row past the last = new layer
+      d.targetStart = Math.max(0, this.snapTime(this.xToTime(x) - d.grabOffset));
+      const row = Math.floor((y + this.scroller.scrollTop) / ROW_H);
+      d.targetRow = Math.max(0, Math.min(this.project.tracks.length, row));
+      this.autoScroll(y);
+      this.invalidate();
+      return;
+    }
+    const dt = (x - d.startX) / this.pps;
+    const buf = this.app.engine.bufferForClip(d.tr, c);
+    const bufDur = buf ? buf.duration : o.trimEnd;
+    if (d.mode === 'trimL') {
       let vs = this.snapTime(o.offset + o.trimStart + dt);
       vs = Math.max(o.offset, Math.max(0, vs));
       vs = Math.min(vs, o.offset + o.trimEnd - 0.05);
@@ -448,6 +513,13 @@ export class Timeline {
     this.invalidate();
   }
 
+  // while dragging a clip near the top/bottom edge, scroll the layers
+  autoScroll(y) {
+    const h = this.scroller.clientHeight, zone = 36;
+    if (y > h - zone) this.scroller.scrollTop += Math.min(18, (y - (h - zone)) / 2);
+    else if (y < zone) this.scroller.scrollTop -= Math.min(18, (zone - y) / 2);
+  }
+
   onUp(e, kind) {
     const d = this.drag;
     this.drag = null;
@@ -457,7 +529,6 @@ export class Timeline {
     if (d.kind === 'ruler' && d.mode !== 'scrub') {
       if (!d.moved) {
         if (d.mode === 'loopNew') {
-          // tap outside the brace: move the loop (same length) to start at the tapped bar
           const len = d.orig.endBar - d.orig.startBar;
           this.app.setLoop(d.startBar, d.startBar + len, true);
         } else if (d.mode === 'loopMove' && !this.project.loop.enabled) {
@@ -467,15 +538,29 @@ export class Timeline {
       this.app.loopChanged();
       return;
     }
+    if (d.kind === 'ruler') {
+      if (!d.moved || this.app.engine.isRunning) this.app.seek(this.snapTime(this.xToTime(x)));
+      return;
+    }
+    // ----- lanes -----
     if (!d.moved) {
-      this.app.seek(this.snapTime(this.xToTime(x)));
+      const hit = d.hit;
+      if (this.app.tool === 'cut' && hit.clip) {
+        if (this.app.engine.isRunning) return;
+        this.app.cutClip(hit.tr, hit.clip, this.snapTime(this.xToTime(x)));
+      } else if (hit.clip) {
+        this.app.selectClip(hit.tr.id, hit.clip.id);   // tap a clip = select it
+      } else {
+        this.app.selectClip(hit.tr ? hit.tr.id : this.app.selectedTrackId, null);
+        this.app.seek(this.snapTime(this.xToTime(x))); // tap empty space = move the playhead
+      }
+      this.invalidate();
       return;
     }
-    if (d.kind === 'ruler' && d.mode === 'scrub' && this.app.engine.isRunning) {
-      this.app.seek(this.snapTime(this.xToTime(x)));
-      return;
-    }
-    if (d.kind === 'lanes' && d.mode !== 'pan') this.app.clipChanged(d.tr);
+    if (d.mode === 'pan') return;
+    if (d.mode === 'move') this.app.moveClip(d.tr, d.clip, d.targetRow, d.targetStart, d.snapshot);
+    else this.app.trimClip(d.tr, d.clip, d.snapshot);
+    this.invalidate();
   }
 
   scrollToTime(t) {

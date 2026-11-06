@@ -52,12 +52,15 @@ export class AudioEngine {
     return buf;
   }
 
-  bufferForTrack(track) {
+  /** Audio a clip plays: the layer's auto-tuned version when it's on and ready, else the raw take. */
+  audioIdForClip(track, clip) {
     const at = track.autotune;
-    if (at && at.enabled && at.processedAudioId && this.buffers.has(at.processedAudioId)) {
-      return this.buffers.get(at.processedAudioId);
-    }
-    return this.buffers.get(track.clip.audioId);
+    const pid = at && at.enabled && at.processed && at.processed[clip.audioId];
+    return pid && this.buffers.has(pid) ? pid : clip.audioId;
+  }
+
+  bufferForClip(track, clip) {
+    return this.buffers.get(this.audioIdForClip(track, clip));
   }
 
   async decodeFile(arrayBuffer) {
@@ -242,19 +245,16 @@ export class AudioEngine {
     const seg = { tlStart, tlEnd, ctxStart, beatsScheduledUntil: tlStart };
     tp.segments.push(seg);
     for (const tr of tp.project.tracks) {
-      const buf = this.bufferForTrack(tr);
-      if (!buf) continue;
-      const c = tr.clip;
-      const clipStart = c.offset + c.trimStart;
-      const clipEnd = c.offset + Math.min(c.trimEnd, buf.duration);
-      const s = Math.max(tlStart, clipStart);
-      const e = Math.min(tlEnd, clipEnd);
-      if (e <= s) continue;
-      const src = this.ctx.createBufferSource();
-      src.buffer = buf;
-      src.connect(tp.chains.get(tr.id).input);
-      src.start(ctxStart + (s - tlStart), s - c.offset, e - s);
-      tp.sources.push(src);
+      for (const c of tr.clips) {
+        const buf = this.bufferForClip(tr, c);
+        if (!buf) continue;
+        const clipStart = c.offset + c.trimStart;
+        const clipEnd = c.offset + Math.min(c.trimEnd, buf.duration);
+        const s = Math.max(tlStart, clipStart);
+        const e = Math.min(tlEnd, clipEnd);
+        if (e <= s) continue;
+        tp.sources.push(playClip(this.ctx, buf, tp.chains.get(tr.id).input, ctxStart + (s - tlStart), s - c.offset, e - s));
+      }
     }
   }
 
@@ -400,17 +400,16 @@ export class AudioEngine {
     for (const tr of project.tracks) {
       if (tr.isReference && !includeReference && !tr.includeInExport) continue;
       if (!isAudible(tr, anySolo)) continue;
-      const buf = this.bufferForTrack(tr);
-      if (!buf) continue;
+      if (!tr.clips.length) continue;
       const chain = buildChain(off, tr, master, reverb);
-      const c = tr.clip;
-      const s = Math.max(0, c.offset + c.trimStart);
-      const e = c.offset + Math.min(c.trimEnd, buf.duration);
-      if (e <= s) continue;
-      const src = off.createBufferSource();
-      src.buffer = buf;
-      src.connect(chain.input);
-      src.start(s, s - c.offset, e - s);
+      for (const c of tr.clips) {
+        const buf = this.bufferForClip(tr, c);
+        if (!buf) continue;
+        const s = Math.max(0, c.offset + c.trimStart);
+        const e = c.offset + Math.min(c.trimEnd, buf.duration);
+        if (e <= s) continue;
+        playClip(off, buf, chain.input, s, s - c.offset, e - s);
+      }
     }
     const rendered = await off.startRendering();
     // trim trailing silence, normalise peaks above 0 dBFS
@@ -480,6 +479,21 @@ export class AudioEngine {
 }
 
 // ---------- helpers ----------
+/** Start one clip with 3 ms fades at both ends, so cuts and copies join without clicks. */
+function playClip(ctx, buf, dest, when, offset, dur) {
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  const env = ctx.createGain();
+  const f = Math.min(0.003, dur / 4);
+  env.gain.setValueAtTime(0, when);
+  env.gain.linearRampToValueAtTime(1, when + f);
+  env.gain.setValueAtTime(1, when + dur - f);
+  env.gain.linearRampToValueAtTime(0, when + dur);
+  src.connect(env).connect(dest);
+  src.start(when, offset, dur);
+  return src;
+}
+
 function micAlive(mic) {
   return mic.track && mic.track.readyState === 'live' && !mic.track.muted && mic.stream.active;
 }
@@ -520,7 +534,7 @@ export function projectEnd(project, includeReference = true) {
   let end = 0;
   for (const tr of project.tracks) {
     if (tr.isReference && !includeReference && !tr.includeInExport) continue;
-    end = Math.max(end, tr.clip.offset + tr.clip.trimEnd);
+    for (const c of tr.clips) end = Math.max(end, c.offset + c.trimEnd);
   }
   return end;
 }

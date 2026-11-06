@@ -32,7 +32,7 @@ const URL = 'http://localhost:8765/';
   await page.evaluate(() => { window.__app.setLoop(1, 3, true); });
   await page.click('#btnRecord');
   await page.waitForFunction(() => window.__app.project.tracks.length === 2, null, { timeout: 12000 });
-  const t2 = await page.evaluate(() => window.__app.project.tracks[1].clip);
+  const t2 = await page.evaluate(() => window.__app.project.tracks[1].clips[0]);
   console.log('loop take clip:', t2);
   assert(Math.abs((t2.trimEnd - t2.trimStart) - 4) < 0.01, 'loop take should be exactly 2 bars (4s @120bpm 4/4)');
   assert(Math.abs(t2.offset + t2.trimStart) < 1e-6, 'loop take should start at bar 1');
@@ -49,7 +49,7 @@ const URL = 'http://localhost:8765/';
   await page.click('.track-header:nth-child(2) .th-gear');
   await page.selectOption('#atScale', 'chromatic');
   await page.click('#atApply');
-  await page.waitForFunction(() => window.__app.project.tracks[1].autotune.processedAudioId, null, { timeout: 15000 });
+  await page.waitForFunction(() => Object.keys(window.__app.project.tracks[1].autotune.processed || {}).length, null, { timeout: 15000 });
   console.log('autotune status:', await page.textContent('#atStatus'));
   await page.screenshot({ path: OUT + '/track-dialog.png' });
   await page.click('#trackDialog footer .btn.primary');
@@ -69,7 +69,7 @@ const URL = 'http://localhost:8765/';
   await page.reload();
   await page.waitForFunction(() => window.__app && window.__app.project && window.__app.project.tracks.length === 2);
   const persisted = await page.evaluate(() => ({ name: window.__app.project.name, bpm: window.__app.project.bpm,
-    mute: window.__app.project.tracks[0].mute, tuned: !!window.__app.engine.bufferForTrack(window.__app.project.tracks[1]) }));
+    mute: window.__app.project.tracks[0].mute, tuned: window.__app.engine.audioIdForClip(window.__app.project.tracks[1], window.__app.project.tracks[1].clips[0]) !== window.__app.project.tracks[1].clips[0].audioId }));
   console.log('after reload:', persisted);
   assert.equal(persisted.name, 'Test Song'); assert.equal(persisted.bpm, 120); assert(persisted.mute);
 
