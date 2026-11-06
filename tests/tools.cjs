@@ -107,7 +107,7 @@ const OUT = process.argv[2] || '.';
   assert(mix > 15);
 
   // 8b. a clip moved onto an auto-tuned layer gets tuned too
-  await p.evaluate(() => { const d = window.__app.project.tracks[1].autotune; d.enabled = true; d.appliedParams = { key: 0, scale: 'chromatic', speed: 1, amount: 1 }; d.processed = {}; });
+  await p.evaluate(() => { const d = window.__app.project.tracks[1].autotune; d.enabled = true; d.scale = 'chromatic'; d.processed = {}; d.sig = {}; });
   await p.mouse.move(await X(1), await Y(0)); await p.mouse.down();
   await p.mouse.move(await X(1), await Y(1), { steps: 6 }); await p.mouse.up();
   await p.waitForFunction(() => { const d = window.__app.project.tracks[1].autotune.processed; return d.bass && d.drums; }, null, { timeout: 20000 });

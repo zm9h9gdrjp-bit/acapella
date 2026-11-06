@@ -1,9 +1,9 @@
 // Network-first service worker: always tries the latest version, falls back to cache offline.
-const CACHE = 'overdub-v7';
+const CACHE = 'overdub-v8';
 const SHELL = [
   './', 'index.html', 'css/style.css', 'manifest.webmanifest', 'icons/icon.svg',
   'js/main.js', 'js/audio-engine.js', 'js/timeline.js', 'js/storage.js', 'js/wav.js',
-  'js/autotune.js', 'js/autotune-worker.js', 'js/recorder-worklet.js', 'js/theme.js', 'js/clips.js',
+  'js/autotune.js', 'js/autotune-worker.js', 'js/recorder-worklet.js', 'js/theme.js', 'js/clips.js', 'js/tuning.js', 'js/tune-editor.js',
 ];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

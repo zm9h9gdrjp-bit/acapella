@@ -242,3 +242,165 @@ export function autotune(x, sampleRate, params, onProgress) {
   const ratios = computeRatios(f0, hop, sampleRate, params);
   return psola(x, sampleRate, f0, ratios, hop, onProgress);
 }
+
+// =====================================================================================
+// Note-based tuning (editor). Ideas taken from the well-known pitch editors:
+//  - every note has a pitch CENTER (its average pitch) that gets pulled to a target note,
+//  - slow wandering inside the note (DRIFT) can be straightened,
+//  - fast wobble (VIBRATO) can be kept, reduced or exaggerated,
+//  - TRANSITION time sets how quickly the correction moves from one note to the next
+//    (0 ms = the hard "robot" step; 30-120 ms = natural).
+// Transitions are smoothed forwards and backwards, so the glide is centred on the note
+// boundary instead of lagging behind it.
+// =====================================================================================
+
+const median = (arr) => { const a = [...arr].sort((x, y) => x - y); return a.length ? a[a.length >> 1] : NaN; };
+
+/** Analyse a take: pitch track + detected notes. Times are seconds into the audio. */
+export function analyze(x, sampleRate, onProgress) {
+  const { hop, f0 } = trackPitch(x, sampleRate, onProgress);
+  return { hop, sampleRate, f0, notes: segmentNotes(f0, hop, sampleRate) };
+}
+
+/** Split a pitch track into notes. Returns [{ start, end, center }] (seconds, midi). */
+export function segmentNotes(f0, hop, sampleRate) {
+  const fd = hop / sampleRate;
+  const N = f0.length;
+  const m = new Float32Array(N);
+  for (let i = 0; i < N; i++) m[i] = f0[i] > 0 ? freqToMidi(f0[i]) : NaN;
+  const segs = []; // [startFrame, endFrame) of voiced material
+  let i = 0;
+  const maxGap = Math.round(0.03 / fd), jumpFrames = Math.round(0.035 / fd);
+  while (i < N) {
+    if (isNaN(m[i])) { i++; continue; }
+    let s = i, recent = [m[i]], dev = 0;
+    i++;
+    while (i < N) {
+      if (isNaN(m[i])) {
+        // bridge short unvoiced gaps (consonants inside a sung line) if pitch carries on
+        let j = i; while (j < N && isNaN(m[j]) && j - i <= maxGap) j++;
+        if (j < N && !isNaN(m[j]) && j - i <= maxGap && Math.abs(m[j] - median(recent)) < 1) { i = j; continue; }
+        break;
+      }
+      const ref = median(recent);
+      if (Math.abs(m[i] - ref) > 0.75) dev++; else dev = 0;
+      if (dev >= jumpFrames) { // pitch moved to a new note and stayed there
+        const cut = i - dev + 1;
+        segs.push([s, cut]);
+        s = cut; recent = []; dev = 0;
+        for (let k = cut; k <= i; k++) if (!isNaN(m[k])) recent.push(m[k]);
+        i++; continue;
+      }
+      // only steady frames update the reference, so a real jump can't drag it along
+      if (dev === 0) { recent.push(m[i]); if (recent.length > 10) recent.shift(); }
+      i++;
+    }
+    segs.push([s, i]);
+  }
+  const center = (a, b) => {
+    const pad = Math.floor((b - a) * 0.15); // ignore scoops at the start and end
+    const vals = [];
+    for (let k = a + pad; k < b - pad; k++) if (!isNaN(m[k])) vals.push(m[k]);
+    if (!vals.length) for (let k = a; k < b; k++) if (!isNaN(m[k])) vals.push(m[k]);
+    return median(vals);
+  };
+  let notes = segs.map(([a, b]) => ({ a, b, center: center(a, b) })).filter(n => !isNaN(n.center));
+  // fold blips shorter than 60 ms into a touching neighbour, else drop them
+  const minF = Math.round(0.06 / fd);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let k = 0; k < notes.length; k++) {
+      const n = notes[k];
+      if (n.b - n.a >= minF) continue;
+      const prev = notes[k - 1], next = notes[k + 1];
+      const touchP = prev && prev.b >= n.a, touchN = next && next.a <= n.b;
+      let into = null;
+      if (touchP && touchN) into = Math.abs(prev.center - n.center) <= Math.abs(next.center - n.center) ? prev : next;
+      else if (touchP) into = prev; else if (touchN) into = next;
+      if (into) { into.a = Math.min(into.a, n.a); into.b = Math.max(into.b, n.b); into.center = center(into.a, into.b); }
+      notes.splice(k, 1); changed = true; break;
+    }
+  }
+  return notes.map(n => ({ start: n.a * fd, end: n.b * fd, center: +n.center.toFixed(3) }));
+}
+
+/** Default per-note settings from a layer's style (0 natural .. 1 robotic) and amount. */
+export function styleDefaults(style = 0.4, amount = 1) {
+  const s = Math.max(0, Math.min(1, style));
+  return {
+    amount,                                   // how far the centre moves to the target (0..1)
+    drift: 0.2 + 0.8 * s,                     // how much slow wandering is straightened (0..1)
+    vibrato: 1 - s,                           // vibrato kept: 0 flat, 1 as sung, 2 doubled
+    transition: Math.round(140 * (1 - s) * (1 - s)), // ms
+    fine: 0,                                  // cents
+  };
+}
+
+/** Effective settings for a note: its own edits over the layer defaults. */
+export function noteParams(note, defaults, key, scale) {
+  const p = { ...defaults };
+  for (const k of ['amount', 'drift', 'vibrato', 'transition', 'fine']) if (note[k] != null) p[k] = note[k];
+  p.target = note.target != null ? note.target : nearestScaleNote(note.center, key, scale);
+  return p;
+}
+
+/**
+ * Per-frame correction in semitones (and the corrected pitch curve, for drawing).
+ * opts: { key, scale, defaults }
+ */
+export function computeCorrection(f0, hop, sampleRate, notes, opts) {
+  const fd = hop / sampleRate;
+  const N = f0.length;
+  const m = new Float32Array(N);
+  for (let i = 0; i < N; i++) m[i] = f0[i] > 0 ? freqToMidi(f0[i]) : NaN;
+  const S = new Float32Array(N).fill(NaN); // note-centre shift (gets the transitions)
+  const R = new Float32Array(N);           // drift / vibrato reshaping (per frame)
+  const tau = new Float32Array(N).fill(0.03);
+  const lpW = Math.max(1, Math.round(0.12 / fd / 2)); // ~120 ms window separates drift from vibrato
+  const sorted = [...notes].sort((a, b) => a.start - b.start);
+  for (const n of sorted) {
+    const p = noteParams(n, opts.defaults, opts.key, opts.scale);
+    const a = Math.max(0, Math.floor(n.start / fd)), b = Math.min(N, Math.ceil(n.end / fd));
+    const shift = (p.target - n.center) * p.amount + p.fine / 100;
+    for (let i = a; i < b; i++) {
+      S[i] = shift;
+      tau[i] = Math.max(0, p.transition) / 1000 / 3;
+      if (isNaN(m[i])) continue;
+      let sum = 0, cnt = 0;
+      for (let k = Math.max(a, i - lpW); k <= Math.min(b - 1, i + lpW); k++) if (!isNaN(m[k])) { sum += m[k]; cnt++; }
+      const lp = sum / cnt;
+      R[i] = -p.drift * (lp - n.center) + (p.vibrato - 1) * (m[i] - lp);
+    }
+  }
+  // between notes: glide linearly from one note's shift to the next
+  let last = -1;
+  for (let i = 0; i <= N; i++) {
+    if (i < N && isNaN(S[i])) continue;
+    const vNext = i < N ? S[i] : (last >= 0 ? S[last] : 0);
+    const vPrev = last >= 0 ? S[last] : vNext;
+    for (let k = last + 1; k < i; k++) S[k] = vPrev + (vNext - vPrev) * ((k - last) / (i - last));
+    last = i;
+  }
+  // zero-phase smoothing: forward then backward one-pole, time constant per note
+  const y = new Float32Array(N);
+  let acc = N ? S[0] : 0;
+  for (let i = 0; i < N; i++) { const al = tau[i] <= 1e-4 ? 1 : 1 - Math.exp(-fd / tau[i]); acc += (S[i] - acc) * al; y[i] = acc; }
+  acc = N ? y[N - 1] : 0;
+  for (let i = N - 1; i >= 0; i--) { const al = tau[i] <= 1e-4 ? 1 : 1 - Math.exp(-fd / tau[i]); acc += (y[i] - acc) * al; y[i] = acc; }
+  const corr = new Float32Array(N), out = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const c = Math.max(-12, Math.min(12, y[i] + R[i]));
+    corr[i] = c;
+    out[i] = isNaN(m[i]) ? NaN : m[i] + c;
+  }
+  return { corr, midi: m, out };
+}
+
+/** Render a take with note-level tuning. analysis = { hop, f0 } from analyze(). */
+export function renderTuned(x, sampleRate, analysis, notes, opts, onProgress) {
+  const { corr } = computeCorrection(analysis.f0, analysis.hop, sampleRate, notes, opts);
+  const ratios = new Float32Array(corr.length);
+  for (let i = 0; i < corr.length; i++) ratios[i] = Math.pow(2, corr[i] / 12);
+  return psola(x, sampleRate, analysis.f0, ratios, analysis.hop, onProgress);
+}

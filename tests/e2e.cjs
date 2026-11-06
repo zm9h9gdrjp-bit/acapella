@@ -50,9 +50,9 @@ const URL = 'http://localhost:8765/';
   await page.selectOption('#atScale', 'chromatic');
   await page.click('#atApply');
   await page.waitForFunction(() => Object.keys(window.__app.project.tracks[1].autotune.processed || {}).length, null, { timeout: 15000 });
-  console.log('autotune status:', await page.textContent('#atStatus'));
+  console.log('tune editor open:', await page.isVisible('#tuneEditor'));
   await page.screenshot({ path: OUT + '/track-dialog.png' });
-  await page.click('#trackDialog footer .btn.primary');
+  await page.click('#teDone');
 
   // Export
   await page.click('#btnExport');

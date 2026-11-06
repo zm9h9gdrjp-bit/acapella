@@ -117,7 +117,7 @@ export class AudioEngine {
     const track = stream.getAudioTracks()[0];
     const settings = track.getSettings ? track.getSettings() : {};
     node.port.onmessage = (e) => this._onWorkletMessage(e.data);
-    const mic = { stream, track, source, node, sink, monitor, deviceId: settings.deviceId || deviceId, inputLatency: settings.latency };
+    const mic = { stream, track, source, node, sink, monitor, deviceId: settings.deviceId || deviceId, inputLatency: settings.latency, label: track.label || '' };
     track.addEventListener('ended', () => { if (this.mic === mic) this.disableMic(); });
     this.mic = mic;
     return { mic, usedFallback };
@@ -169,11 +169,15 @@ export class AudioEngine {
   }
 
   /** Best guess of round-trip latency in seconds (output + input). */
-  estimatedLatency() {
+  estimatedLatency(label = this.mic ? this.mic.label : '') {
     if (!this.ctx) return 0.02;
-    const out = (this.ctx.outputLatency || 0) + (this.ctx.baseLatency || 0);
+    const reported = this.ctx.outputLatency || 0;
+    const out = reported + (this.ctx.baseLatency || 0);
     const inp = (this.mic && this.mic.inputLatency) || 0.01;
-    return out + inp;
+    // Bluetooth earphones add ~150-250 ms each way that older iPhones don't report at all.
+    // Only add a guess when the browser didn't report a Bluetooth-sized delay itself.
+    const bt = isBluetooth(label) && reported < 0.06 ? 0.19 : 0;
+    return out + inp + bt;
   }
 
   // ---------- transport ----------
@@ -433,6 +437,66 @@ export class AudioEngine {
    * Plays clicks through the speakers and listens for them with the mic.
    * Must be run WITHOUT headphones. Resolves with latency in seconds, or throws.
    */
+  /**
+   * Sync test that works WITH headphones on (incl. Bluetooth): the singer claps (or says "ta")
+   * along with clicks they hear. Clap time - click time = the whole round trip the takes need
+   * to be shifted by. Resolves with seconds, or throws with a reason.
+   */
+  async calibrateTapAlong({ beats = 8, lead = 4, interval = 0.6, onBeat } = {}) {
+    await this.init();
+    if (!this.mic) throw new Error('Microphone not enabled');
+    if (this.transport) this.stop();
+    const ctx = this.ctx;
+    const t0 = ctx.currentTime + 0.4;
+    const total = lead + beats;
+    for (let i = 0; i < total; i++) {
+      const t = t0 + i * interval;
+      const osc = ctx.createOscillator(), e = ctx.createGain();
+      osc.frequency.value = i < lead ? 880 : 1320;
+      e.gain.setValueAtTime(0, t);
+      e.gain.linearRampToValueAtTime(0.9, t + 0.002);
+      e.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+      osc.connect(e).connect(ctx.destination);
+      osc.start(t); osc.stop(t + 0.07);
+      if (onBeat) setTimeout(() => onBeat(i, lead, total), Math.max(0, (t - ctx.currentTime) * 1000));
+    }
+    const capture = this._startCapture(t0);
+    this._stopCapture(t0 + total * interval + 0.6);
+    const x = await capture;
+    const sr = ctx.sampleRate;
+    // envelope (1 ms hop) and a noise floor
+    const hopN = Math.round(sr / 1000);
+    const env = new Float32Array(Math.floor(x.length / hopN));
+    for (let i = 0; i < env.length; i++) {
+      let m = 0;
+      for (let k = i * hopN; k < (i + 1) * hopN; k++) m = Math.max(m, Math.abs(x[k]));
+      env[i] = m;
+    }
+    const sorted = Float32Array.from(env).sort();
+    const floor = sorted[Math.floor(sorted.length * 0.3)] || 0;
+    const delays = [];
+    for (let b = lead; b < total; b++) {
+      // a clap for this click can land from 120 ms early (anticipation) to 550 ms late (Bluetooth)
+      const c = Math.round(b * interval * 1000);
+      const a = Math.max(0, c - 120), e = Math.min(env.length, c + 550);
+      let peak = 0, pi = -1;
+      for (let i = a; i < e; i++) if (env[i] > peak) { peak = env[i]; pi = i; }
+      if (pi < 0 || peak < Math.max(0.02, floor * 6)) continue;
+      // onset = first point rising above 35% of this clap's peak
+      let on = pi;
+      while (on > a && env[on - 1] > peak * 0.35) on--;
+      delays.push((on - c) / 1000);
+    }
+    if (delays.length < Math.ceil(beats * 0.6)) {
+      throw new Error('Couldn\u2019t hear enough claps. Clap a bit louder, right on each high click, and try again.');
+    }
+    delays.sort((p, q) => p - q);
+    const q1 = delays[Math.floor(delays.length * 0.25)], q3 = delays[Math.floor(delays.length * 0.75)];
+    if (q3 - q1 > 0.06) throw new Error('The claps were too uneven to measure. Try again and clap steadily with the clicks.');
+    const mid = delays.slice(Math.floor(delays.length * 0.25), Math.ceil(delays.length * 0.75) || 1);
+    return Math.max(0, mid.reduce((p, q) => p + q, 0) / mid.length);
+  }
+
   async calibrateLatency() {
     await this.init();
     if (!this.mic) throw new Error('Microphone not enabled');
@@ -494,6 +558,10 @@ function playClip(ctx, buf, dest, when, offset, dur) {
   return src;
 }
 
+export function isBluetooth(label) {
+  return /airpods|bluetooth|beats|buds|headset|hands-?free|wh-|wf-|jabra|bose|\bbt\b/i.test(label || '');
+}
+
 function micAlive(mic) {
   return mic.track && mic.track.readyState === 'live' && !mic.track.muted && mic.stream.active;
 }
@@ -509,22 +577,56 @@ function isAudible(tr, anySolo) {
   return true;
 }
 
+/** Per-layer sound settings. Values: dB for EQ bands, 0..1 for compression. */
+export const MIX_DEFAULT = { lowCut: 80, warmth: 0, presence: 0, air: 0, tameS: 0, comp: 0.3 };
+export const MIX_PRESETS = {
+  natural:  { lowCut: 80,  warmth: 0,  presence: 0,  air: 0,   tameS: 0,  comp: 0.3 },
+  lead:     { lowCut: 100, warmth: -1, presence: 3,  air: 2.5, tameS: 3,  comp: 0.6 },
+  backing:  { lowCut: 150, warmth: -2, presence: -1, air: 1.5, tameS: 2,  comp: 0.5 },
+  bass:     { lowCut: 40,  warmth: 3,  presence: -1, air: -2,  tameS: 0,  comp: 0.55 },
+  beatbox:  { lowCut: 35,  warmth: 2,  presence: 2,  air: 1,   tameS: 0,  comp: 0.75 },
+};
+
+/**
+ * One layer's signal path:
+ *   input -> low cut -> warmth (low shelf) -> presence (bell) -> tame S (bell cut) -> air (high shelf)
+ *         -> compressor -> make-up gain -> volume -> pan -> out (+ reverb send)
+ */
 function buildChain(ctx, tr, dest, reverbIn) {
   const input = ctx.createGain();
+  const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.Q.value = 0.7;
+  const warm = ctx.createBiquadFilter(); warm.type = 'lowshelf'; warm.frequency.value = 220;
+  const pres = ctx.createBiquadFilter(); pres.type = 'peaking'; pres.frequency.value = 3200; pres.Q.value = 0.9;
+  const ess = ctx.createBiquadFilter(); ess.type = 'peaking'; ess.frequency.value = 6800; ess.Q.value = 2.2;
+  const air = ctx.createBiquadFilter(); air.type = 'highshelf'; air.frequency.value = 10000;
+  const comp = ctx.createDynamicsCompressor();
+  comp.knee.value = 8; comp.attack.value = 0.006; comp.release.value = 0.16;
+  const makeup = ctx.createGain();
   const vol = ctx.createGain();
   const pan = ctx.createStereoPanner();
   const send = ctx.createGain();
-  input.connect(vol).connect(pan).connect(dest);
+  input.connect(hp).connect(warm).connect(pres).connect(ess).connect(air).connect(comp).connect(makeup).connect(vol).connect(pan).connect(dest);
   pan.connect(send).connect(reverbIn);
+  const nodes = [input, hp, warm, pres, ess, air, comp, makeup, vol, pan, send];
   const chain = {
     input,
     update(t) {
+      const m = { ...MIX_DEFAULT, ...(t.mix || {}) };
+      hp.frequency.value = Math.max(20, m.lowCut || 20);
+      warm.gain.value = m.warmth;
+      pres.gain.value = m.presence;
+      ess.gain.value = -Math.abs(m.tameS);
+      air.gain.value = m.air;
+      const c = Math.max(0, Math.min(1, m.comp));
+      comp.threshold.value = -6 - 26 * c;   // more amount = catches quieter parts too
+      comp.ratio.value = 1 + 5 * c;
+      makeup.gain.value = Math.pow(10, (c * 7) / 20); // roughly win back what was squashed
       vol.gain.value = t.volume;
       pan.pan.value = t.pan;
       send.gain.value = t.reverb;
     },
     setAudible(on) { input.gain.value = on ? 1 : 0; },
-    disconnect() { try { input.disconnect(); vol.disconnect(); pan.disconnect(); send.disconnect(); } catch { /* */ } },
+    disconnect() { for (const n of nodes) { try { n.disconnect(); } catch { /* */ } } },
   };
   chain.update(tr);
   return chain;

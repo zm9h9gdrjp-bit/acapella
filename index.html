@@ -130,6 +130,8 @@
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2"><path d="M9 4h6v3H9z"/><path d="M9 5H5v16h14V5h-4"/></g></svg><span>Paste</span></button>
       <button class="tool act" id="actRepeat" title="Repeat the selected clip end to end">
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="8" width="6" height="8"/><rect x="9" y="8" width="6" height="8"/><rect x="16" y="8" width="6" height="8" stroke-dasharray="2 2"/></g></svg><span>Repeat</span></button>
+      <button class="tool act" id="actTune" title="Open the tune editor for the selected layer (T)">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></g></svg><span>Tune</span></button>
       <button class="tool act" id="actDelete" title="Delete the selected clip (Delete)">
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 7V4h4v3M6 7l1 13h10l1-13"/></g></svg><span>Delete</span></button>
     </div>
@@ -173,7 +175,30 @@
         <div class="row"><label>Volume</label><input type="range" id="tdVolume" min="0" max="1.5" step="0.01"><output id="tdVolumeOut"></output></div>
         <div class="row"><label>Pan</label><input type="range" id="tdPan" min="-1" max="1" step="0.01"><output id="tdPanOut"></output></div>
         <div class="row"><label>Reverb</label><input type="range" id="tdReverb" min="0" max="1" step="0.01"><output id="tdReverbOut"></output></div>
+        <div class="row"><label>Timing</label><input type="range" id="tdNudge" min="-300" max="300" step="5" value="0"><output id="tdNudgeOut">0 ms</output></div>
+        <div class="nudge-learn" id="tdNudgeLearn" hidden>
+          <span class="muted small" id="tdNudgeText"></span>
+          <button type="button" class="btn sm" id="tdNudgeSave">Use for future takes</button>
+        </div>
         <div class="row" id="tdRefRow"><label>Export</label><label class="check"><input type="checkbox" id="tdIncludeExport"> Include this reference track in exports</label></div>
+
+        <fieldset class="sound" id="tdSound">
+          <legend>Sound</legend>
+          <div class="quick-btns" id="mixPresets">
+            <button type="button" class="btn sm" data-preset="natural">Natural</button>
+            <button type="button" class="btn sm" data-preset="lead">Lead</button>
+            <button type="button" class="btn sm" data-preset="backing">Backing</button>
+            <button type="button" class="btn sm" data-preset="bass">Bass voice</button>
+            <button type="button" class="btn sm" data-preset="beatbox">Beatbox</button>
+          </div>
+          <div class="row"><label>Low cut</label><input type="range" id="mxLowCut" min="20" max="300" step="5"><output id="mxLowCutOut"></output></div>
+          <div class="row"><label>Warmth</label><input type="range" id="mxWarmth" min="-6" max="6" step="0.5"><output id="mxWarmthOut"></output></div>
+          <div class="row"><label>Presence</label><input type="range" id="mxPresence" min="-6" max="6" step="0.5"><output id="mxPresenceOut"></output></div>
+          <div class="row"><label>Air</label><input type="range" id="mxAir" min="-6" max="6" step="0.5"><output id="mxAirOut"></output></div>
+          <div class="row"><label>Tame S</label><input type="range" id="mxTameS" min="0" max="8" step="0.5"><output id="mxTameSOut"></output></div>
+          <div class="row"><label>Compress</label><input type="range" id="mxComp" min="0" max="1" step="0.05"><output id="mxCompOut"></output></div>
+          <p class="muted small">Low cut removes rumble and mic handling. Warmth is body, presence is clarity, air is sparkle. Tame S softens sharp “s” sounds. Compress evens out loud and quiet parts.</p>
+        </fieldset>
 
         <fieldset class="autotune" id="tdAutotune">
           <legend>Auto-tune</legend>
@@ -182,16 +207,16 @@
             <select id="atKey"></select>
             <select id="atScale"><option value="major">Major</option><option value="minor">Minor</option><option value="chromatic">Chromatic (any note)</option></select>
           </div>
-          <div class="row"><label>Speed</label>
+          <div class="row"><label>Style</label>
             <div class="range-labels"><input type="range" id="atSpeed" min="0" max="100" step="1"><div><span>Natural</span><span>Robotic</span></div></div>
           </div>
           <div class="row"><label>Amount</label><input type="range" id="atAmount" min="0" max="100" step="1"><output id="atAmountOut"></output></div>
           <div class="at-actions">
-            <button type="button" class="btn primary" id="atApply">Apply auto-tune</button>
+            <button type="button" class="btn primary" id="atApply">Open tune editor</button>
             <span id="atStatus" class="muted small"></span>
           </div>
           <progress id="atProgress" max="1" value="0" hidden></progress>
-          <p class="muted small">Finds the pitch of each note and pulls it to the nearest note in the key. The original take stays saved; untick the box to hear it.</p>
+          <p class="muted small">Finds every note you sang and pulls it to the nearest note in the key. Open the tune editor to fix single notes, change notes, and set vibrato and transitions. The original take is always kept.</p>
         </fieldset>
       </div>
       <footer>
@@ -200,6 +225,81 @@
         <button class="btn primary" value="close">Done</button>
       </footer>
     </form>
+  </dialog>
+
+  <!-- Tune editor -->
+  <dialog id="tuneEditor" class="tune-dlg" aria-label="Tune editor">
+    <div class="tune">
+      <header class="tune-head">
+        <button type="button" class="btn primary" id="teDone">Done</button>
+        <strong class="te-name" id="teName">Layer</strong>
+        <div class="te-key">
+          <label for="teKey" class="caps-label">Key</label>
+          <select id="teKey"></select>
+          <select id="teScale" aria-label="Scale"><option value="major">Major</option><option value="minor">Minor</option><option value="chromatic">Any note</option></select>
+        </div>
+        <div class="te-styles" role="group" aria-label="Style for untouched notes">
+          <button type="button" class="btn sm" data-style="25" title="Keeps your vibrato and slides">Natural</button>
+          <button type="button" class="btn sm" data-style="65" title="Clean pop tuning">Tight</button>
+          <button type="button" class="btn sm" data-style="100" title="Hard steps between notes, no vibrato">Robotic</button>
+        </div>
+        <button type="button" class="toggle" id="teAB" aria-pressed="true" title="Compare with the original"><i class="led"></i><span id="teABLabel">Tuned</span></button>
+        <button type="button" class="tool te-play" id="tePlay" title="Play / stop (Space)">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M7 4v16l13-8z"/></svg><span id="tePlayLabel">Play</span></button>
+      </header>
+      <div class="toolbar te-tools" role="toolbar" aria-label="Tune tools">
+        <div class="tool-group">
+          <button type="button" class="tool" data-te-tool="select" aria-pressed="true" title="Select and drag notes (V)">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M5 3l13 8-6 1.4L15.6 20l-2.6 1.2-3.6-7.6L5 17z"/></svg><span>Select</span></button>
+          <button type="button" class="tool" data-te-tool="cut" aria-pressed="false" title="Cut a note in two (C)">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M8.5 7.5L20 18M8.5 16.5L20 6"/></g></svg><span>Cut</span></button>
+        </div>
+        <div class="tool-group">
+          <button type="button" class="tool" id="teMulti" aria-pressed="false" title="Tap several notes to select them together">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="8" height="5" rx="1"/><rect x="13" y="14" width="8" height="5" rx="1"/><path d="M17 3v6M14 6h6"/></g></svg><span>Multi</span></button>
+          <button type="button" class="tool" id="teAll" title="Select every note (Ctrl/Cmd+A)">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="7" height="5" rx="1"/><rect x="14" y="9" width="7" height="5" rx="1"/><rect x="6" y="15" width="7" height="5" rx="1"/></g></svg><span>All</span></button>
+        </div>
+        <div class="tool-group">
+          <button type="button" class="tool" id="teCopy" title="Copy this note's tuning (Ctrl/Cmd+C)">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="8" width="12" height="12" rx="1"/><path d="M16 8V4H4v12h4"/></g></svg><span>Copy</span></button>
+          <button type="button" class="tool" id="tePaste" title="Paste the tuning onto the selected notes (Ctrl/Cmd+V)">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2"><path d="M9 4h6v3H9z"/><path d="M9 5H5v16h14V5h-4"/></g></svg><span>Paste</span></button>
+          <button type="button" class="tool" id="teReset" title="Back to the layer's style">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" d="M4 12a8 8 0 1 0 3-6.2M4 4v4h4"/></svg><span>Reset</span></button>
+        </div>
+        <div class="tool-group">
+          <button type="button" class="tool" id="teUndo" title="Undo (Ctrl/Cmd+Z)">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" d="M9 14L4 9l5-5M4 9h10a6 6 0 010 12h-3"/></svg><span>Undo</span></button>
+          <button type="button" class="tool" id="teRedo" title="Redo">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" d="M15 14l5-5-5-5M20 9H10a6 6 0 000 12h3"/></svg><span>Redo</span></button>
+        </div>
+        <div class="tool-group">
+          <button type="button" class="tool" id="teZoomOut" title="Zoom out"><span class="big">−</span><span>Zoom</span></button>
+          <button type="button" class="tool" id="teZoomIn" title="Zoom in"><span class="big">+</span><span>Zoom</span></button>
+        </div>
+      </div>
+      <div class="te-canvas-wrap">
+        <canvas id="teCanvas"></canvas>
+        <div class="te-status" id="teStatus" hidden></div>
+      </div>
+      <div class="te-inspector no-sel" id="teInspector">
+        <div class="te-note-row">
+          <span class="caps-label">Note</span>
+          <button type="button" class="btn sm" id="teNoteDown" aria-label="Lower">−</button>
+          <output id="teNote" class="big-num">–</output>
+          <button type="button" class="btn sm" id="teNoteUp" aria-label="Higher">+</button>
+          <span class="muted small" id="teSelInfo"></span>
+        </div>
+        <div class="te-grid">
+          <div class="row"><label for="teAmount" title="How far the note is pulled onto the target">Correct</label><input type="range" id="teAmount" min="0" max="100" step="1"><output id="teAmountOut"></output></div>
+          <div class="row"><label for="teDrift" title="Straightens slow wandering inside the note">Straighten</label><input type="range" id="teDrift" min="0" max="100" step="1"><output id="teDriftOut"></output></div>
+          <div class="row"><label for="teVibrato" title="0% flat, 100% as sung, 200% doubled">Vibrato</label><input type="range" id="teVibrato" min="0" max="200" step="5"><output id="teVibratoOut"></output></div>
+          <div class="row"><label for="teTrans" title="How quickly it moves into this note: 0 ms is the robot step">Transition</label><input type="range" id="teTrans" min="0" max="250" step="5"><output id="teTransOut"></output></div>
+          <div class="row"><label for="teFine" title="Fine pitch in cents (100 cents = 1 semitone)">Fine</label><input type="range" id="teFine" min="-50" max="50" step="1"><output id="teFineOut"></output></div>
+        </div>
+      </div>
+    </div>
   </dialog>
 
   <!-- Repeat -->
@@ -278,13 +378,22 @@
         <div class="row"><label for="inputDevice">Microphone</label><select id="inputDevice"><option value="">Default</option></select></div>
         <label class="check"><input type="checkbox" id="monitor"> Hear yourself while recording (headphones only, slight delay)</label>
         <fieldset>
-          <legend>Latency compensation</legend>
-          <p class="muted small">Sound takes a moment to get out of the headphones and back in through the mic. Each new take is moved earlier by this much so layers sit together.</p>
-          <label class="check"><input type="checkbox" id="latAuto"> Automatic (estimated <span id="latEstimate">–</span> ms)</label>
-          <div class="row"><label for="latMs">Manual</label><input type="number" id="latMs" min="0" max="1000" step="1"> <span class="muted small">ms</span></div>
-          <button type="button" class="btn" id="btnCalibrate">Measure</button>
-          <p class="muted small">Unplug headphones, turn the volume up, keep quiet, press Measure. Eight clicks will play.</p>
-          <p id="calibResult" class="small"></p>
+          <legend>Timing (sync)</legend>
+          <p class="muted small">Sound takes a moment to reach your ears and get back into the mic. AirPods and other Bluetooth earphones add a lot. Every take is moved earlier by this amount so it sits on the beat. Each pair of earphones remembers its own value.</p>
+          <div class="sync-now">
+            <div><span class="caps-label">Earphones / mic</span><strong id="latDevice">–</strong></div>
+            <div><span class="caps-label">Delay</span><strong id="latValue">–</strong></div>
+          </div>
+          <button type="button" class="btn primary" id="btnSyncTest">Sync test (earphones on)</button>
+          <p class="muted small">Put your earphones in, press the button, and clap (or say “ta”) on each <strong>high</strong> click. The first four low clicks are a count-in.</p>
+          <p id="calibResult" class="small sync-result" aria-live="polite"></p>
+          <div class="row"><label for="latMs">By hand</label><input type="number" id="latMs" min="0" max="1000" step="1"> <span class="muted small">ms</span>
+            <button type="button" class="btn sm" id="btnLatReset" title="Forget the value for these earphones and go back to the estimate">Reset</button></div>
+          <ul class="lat-list" id="latList"></ul>
+          <details class="small"><summary class="muted">No earphones? Measure through the speaker</summary>
+            <p class="muted small">Unplug earphones, turn the volume up, keep quiet, press Measure. Eight clicks will play.</p>
+            <button type="button" class="btn" id="btnCalibrate">Measure with speaker</button>
+          </details>
         </fieldset>
         <p class="muted small" id="storageInfo"></p>
       </div>

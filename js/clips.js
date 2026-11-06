@@ -15,6 +15,7 @@ export const clipLen = (c) => c.trimEnd - c.trimStart;
 
 /** Upgrade songs saved before layers could hold several clips. Mutates and returns p. */
 export function migrateProject(p, makeId) {
+  p.tuning = p.tuning || {};
   for (const tr of p.tracks) {
     if (!tr.clips) {
       tr.clips = tr.clip ? [{ id: makeId(), ...tr.clip }] : [];
@@ -26,6 +27,7 @@ export function migrateProject(p, makeId) {
       if (a.processedAudioId && tr.clips[0]) a.processed[tr.clips[0].audioId] = a.processedAudioId;
     }
     delete a.processedAudioId;
+    a.sig = a.sig || {};
   }
   return p;
 }

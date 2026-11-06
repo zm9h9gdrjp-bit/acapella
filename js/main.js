@@ -1,7 +1,9 @@
-import { AudioEngine } from './audio-engine.js';
+import { AudioEngine, isBluetooth, MIX_DEFAULT, MIX_PRESETS } from './audio-engine.js';
 import { Timeline } from './timeline.js';
 import { db, uid, requestPersistence } from './storage.js';
 import { encodeWav } from './wav.js';
+import { Tuning } from './tuning.js';
+import { TuneEditor } from './tune-editor.js';
 import { NOTE_NAMES } from './autotune.js';
 import { displayColor, applyTheme, onThemeChange } from './theme.js';
 import { migrateProject, placeClip, splitClip, repeatClip, findClip, clipStart, clipEnd, clipLen, referencedAudio, sortClips } from './clips.js';
@@ -14,7 +16,7 @@ const LAST_PROJECT_KEY = 'acapella.lastProject';
 
 // ---------- device settings (per device, not per song) ----------
 function loadSettings() {
-  const def = { latAuto: true, latMs: 30, deviceId: '', monitor: false, theme: 'auto' };
+  const def = { latAuto: true, latMs: 30, deviceId: '', monitor: false, theme: 'auto', latByDevice: {}, lastMicLabel: '' };
   try { return { ...def, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; } catch { return def; }
 }
 function saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(app.settings)); } catch { /* */ } }
@@ -43,8 +45,10 @@ const app = {
   settings: loadSettings(),
   saveTimer: null,
 
+  newId() { return uid(); },
   // ----- undo: whole-layer snapshots taken before each edit -----
-  snapshot() { return structuredClone(this.project.tracks); },
+  snapshot() { return structuredClone({ tracks: this.project.tracks, tuning: this.project.tuning || {} }); },
+  restore(s) { this.project.tracks = s.tracks; this.project.tuning = s.tuning; },
   commit(before) {
     this.undoStack.push(before);
     if (this.undoStack.length > 60) this.undoStack.shift();
@@ -54,13 +58,13 @@ const app = {
   undo() {
     if (!this.undoStack.length || this.recording) return;
     this.redoStack.push(this.snapshot());
-    this.project.tracks = this.undoStack.pop();
+    this.restore(this.undoStack.pop());
     afterEdit(true);
   },
   redo() {
     if (!this.redoStack.length || this.recording) return;
     this.undoStack.push(this.snapshot());
-    this.project.tracks = this.redoStack.pop();
+    this.restore(this.redoStack.pop());
     afterEdit(true);
   },
 
@@ -357,8 +361,18 @@ function frame() {
 }
 
 // ---------- transport actions ----------
-function latencySeconds() {
-  return app.settings.latAuto ? app.engine.estimatedLatency() : (app.settings.latMs || 0) / 1000;
+// ----- timing: each pair of earphones / mic remembers its own delay -----
+const micKey = (label) => (label || '').trim() || 'Built-in mic';
+function latencyInfo(label = app.engine.mic ? app.engine.mic.label : app.settings.lastMicLabel) {
+  const key = micKey(label);
+  const saved = app.settings.latByDevice[key];
+  if (saved != null) return { key, sec: saved / 1000, measured: true };
+  if (!app.settings.latAuto) return { key, sec: (app.settings.latMs || 0) / 1000, measured: true }; // old manual value
+  return { key, sec: app.engine.estimatedLatency(label), measured: false };
+}
+function latencySeconds() { return latencyInfo().sec; }
+function rememberMic() {
+  if (app.engine.mic) { app.settings.lastMicLabel = app.engine.mic.label || ''; saveSettings(); }
 }
 
 async function startPlayback() {
@@ -413,6 +427,8 @@ async function toggleRecord() {
       : 'Could not open the microphone: ' + e.message, true, 6000);
     return;
   }
+  rememberMic();
+  const recLat = latencyInfo();
   const project = app.project;
   const projectId = project.id;
   // a selected empty layer gets the take; otherwise the take gets a new layer
@@ -424,9 +440,9 @@ async function toggleRecord() {
       project,
       from: app.playhead,
       record: true,
-      latency: latencySeconds(),
+      latency: recLat.sec,
       onEnded: onTransportEnded,
-      onRecorded: (samples, info) => saveTake(projectId, samples, info, target && target.id),
+      onRecorded: (samples, info) => saveTake(projectId, samples, info, target && target.id, recLat),
     });
   } catch (e) {
     app.recording = false;
@@ -441,7 +457,7 @@ async function toggleRecord() {
   renderTransport();
 }
 
-async function saveTake(projectId, samples, info, targetId = null) {
+async function saveTake(projectId, samples, info, targetId = null, lat = null) {
   if (!app.project || app.project.id !== projectId) return;
   const p = app.project;
   const sr = info.sampleRate;
@@ -459,7 +475,8 @@ async function saveTake(projectId, samples, info, targetId = null) {
   }
   app.engine.setBufferFromRecord(audio);
   const before = app.snapshot();
-  const clip = { id: uid(), audioId: audio.id, offset: info.startTl, trimStart, trimEnd };
+  const clip = { id: uid(), audioId: audio.id, offset: info.startTl, trimStart, trimEnd,
+    rec: lat ? { mic: lat.key, latencyMs: Math.round(lat.sec * 1000), measured: lat.measured } : null };
   let tr = targetId && p.tracks.find(t => t.id === targetId && !t.clips.length);
   if (tr) { tr.clips.push(clip); ensureTuned(tr); }
   else { tr = makeTrack({ name: nextLayerName(), clips: [clip] }); p.tracks.push(tr); }
@@ -467,7 +484,10 @@ async function saveTake(projectId, samples, info, targetId = null) {
   app.selectedClipId = clip.id;
   app.commit(before);
   timeline.scrollToRow(p.tracks.indexOf(tr));
-  toast(`${tr.name} saved.`);
+  if (lat && !lat.measured && isBluetooth(lat.key)) {
+    toast(`${tr.name} saved. Timing for ${lat.key} is only a guess: run the sync test once.`, false, 7000,
+      { label: 'Sync test', fn: () => openSettings(true) });
+  } else toast(`${tr.name} saved.`);
 }
 
 async function openMic() {
@@ -497,7 +517,7 @@ function makeTrack({ name, clips = [], isReference = false }) {
     mute: false, solo: false,
     isReference, includeInExport: false,
     clips,
-    autotune: { enabled: false, key: 0, scale: 'major', speed: 60, amount: 100, processed: {}, appliedParams: null },
+    autotune: { enabled: false, key: 0, scale: 'major', speed: 40, amount: 100, processed: {}, sig: {} },
   };
 }
 
@@ -587,6 +607,7 @@ document.addEventListener('keydown', (e) => {
   }
   if (k === 'v') { setTool('move'); return; }
   if (k === 'n') { addLayer(); return; }
+  if (k === 't') { $('actTune').click(); return; }
   if (k === 'c') { setTool('cut'); return; }
   if (e.key === 'Escape') { app.selectClip(app.selectedTrackId, null); return; }
   if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
@@ -620,6 +641,8 @@ function afterEdit(fromHistory = false) {
   renderToolbar();
   timeline.invalidate();
   app.saveSoon();
+  tuneEditor.onEdit();
+  for (const t of p.tracks) if (t.autotune.enabled) ensureTunedSoon(t);
   restartIfPlaying();
 }
 
@@ -633,6 +656,8 @@ function renderToolbar() {
   $('actCopy').disabled = busy || !sel;
   $('actRepeat').disabled = busy || !sel;
   $('actDelete').disabled = busy || !sel;
+  const selTr = app.project.tracks.find(t => t.id === app.selectedTrackId);
+  $('actTune').disabled = busy || !selTr || !selTr.clips.length || selTr.isReference;
   $('actPaste').disabled = busy || !app.clipboard;
   $('actUndo').disabled = busy || !app.undoStack.length;
   $('actRedo').disabled = busy || !app.redoStack.length;
@@ -725,6 +750,7 @@ document.querySelectorAll('#toolbar [data-tool]').forEach(b => b.addEventListene
 $('actCopy').addEventListener('click', copyClip);
 $('actPaste').addEventListener('click', pasteClip);
 $('actRepeat').addEventListener('click', openRepeat);
+$('actTune').addEventListener('click', () => openTuneEditor(app.project.tracks.find(t => t.id === app.selectedTrackId)));
 $('actDelete').addEventListener('click', deleteClip);
 $('actUndo').addEventListener('click', () => app.undo());
 $('actRedo').addEventListener('click', () => app.redo());
@@ -819,11 +845,6 @@ let dlgTrack = null;
 const keySel = $('atKey');
 NOTE_NAMES.forEach((n, i) => { const o = document.createElement('option'); o.value = i; o.textContent = n; keySel.appendChild(o); });
 
-function atParams(tr) {
-  const a = tr.autotune;
-  return { key: +a.key, scale: a.scale, speed: a.speed / 100, amount: a.amount / 100 };
-}
-function sameParams(a, b) { return a && b && a.key === b.key && a.scale === b.scale && a.speed === b.speed && a.amount === b.amount; }
 
 function openTrackDialog(tr) {
   dlgTrack = tr;
@@ -831,6 +852,9 @@ function openTrackDialog(tr) {
   $('tdVolume').value = tr.volume; $('tdPan').value = tr.pan; $('tdReverb').value = tr.reverb;
   $('tdRefRow').hidden = !tr.isReference;
   $('tdIncludeExport').checked = !!tr.includeInExport;
+  nudgeBase = null;
+  syncMixUI();
+  $('tdNudge').value = 0; $('tdNudgeOut').textContent = '0 ms'; $('tdNudgeLearn').hidden = true;
   $('tdAutotune').hidden = tr.isReference;
   const a = tr.autotune;
   $('atEnabled').checked = a.enabled;
@@ -852,13 +876,13 @@ function updateAtStatus() {
   const tr = dlgTrack;
   if (!tr) return;
   const a = tr.autotune;
-  const busy = atBusy.has(tr.id);
-  $('atApply').disabled = busy;
+  const busy = tuning.busy(tr.id);
   let s;
-  if (busy) s = 'Working…';
-  else if (!Object.keys(a.processed || {}).length) s = 'Not applied yet.';
-  else if (sameParams(a.appliedParams, atParams(tr))) s = a.enabled ? 'Applied and on.' : 'Applied, but switched off (you’re hearing the original).';
-  else s = 'Settings changed. Press Apply to hear them.';
+  if (!tr.clips.length) s = 'Record something on this layer first.';
+  else if (busy) s = 'Updating the tuned sound…';
+  else if (!a.enabled) s = 'Off: you hear the original.';
+  else if (tuning.stale(tr).length) s = 'Will update in a moment…';
+  else s = 'On.';
   $('atStatus').textContent = s;
 }
 
@@ -874,23 +898,84 @@ for (const [id, key] of [['tdVolume', 'volume'], ['tdPan', 'pan'], ['tdReverb', 
     if (key === 'volume') renderHeaders();
   });
 }
+// ---------- sound (EQ / compressor) ----------
+const MIX_FIELDS = [
+  ['mxLowCut', 'lowCut', (v) => v <= 20 ? 'off' : v + ' Hz'],
+  ['mxWarmth', 'warmth', (v) => (v > 0 ? '+' : '') + v + ' dB'],
+  ['mxPresence', 'presence', (v) => (v > 0 ? '+' : '') + v + ' dB'],
+  ['mxAir', 'air', (v) => (v > 0 ? '+' : '') + v + ' dB'],
+  ['mxTameS', 'tameS', (v) => v ? '−' + v + ' dB' : 'off'],
+  ['mxComp', 'comp', (v) => Math.round(v * 100) + '%'],
+];
+function syncMixUI() {
+  const tr = dlgTrack;
+  const m = { ...MIX_DEFAULT, ...(tr.mix || {}) };
+  for (const [id, key, fmt] of MIX_FIELDS) { $(id).value = m[key]; $(id + 'Out').textContent = fmt(m[key]); }
+  document.querySelectorAll('#mixPresets [data-preset]').forEach(b => {
+    const pr = MIX_PRESETS[b.dataset.preset];
+    b.classList.toggle('on', Object.keys(pr).every(k => pr[k] === m[k]));
+  });
+}
+for (const [id, key] of MIX_FIELDS) {
+  $(id).addEventListener('input', (e) => {
+    const tr = dlgTrack;
+    tr.mix = { ...MIX_DEFAULT, ...(tr.mix || {}), [key]: +e.target.value };
+    syncMixUI(); mixChanged();
+  });
+}
+document.querySelectorAll('#mixPresets [data-preset]').forEach(b => b.addEventListener('click', () => {
+  dlgTrack.mix = { ...MIX_PRESETS[b.dataset.preset] };
+  syncMixUI(); mixChanged();
+}));
+
+// Timing: slide the whole layer earlier/later by ear. Can teach the earphones' delay too.
+let nudgeBase = null; // { before snapshot, offsets }
+$('tdNudge').addEventListener('input', (e) => {
+  const tr = dlgTrack;
+  if (!nudgeBase) nudgeBase = { before: app.snapshot(), offsets: tr.clips.map(c => c.offset), startMs: 0 };
+  const ms = +e.target.value;
+  tr.clips.forEach((c, i) => { c.offset = nudgeBase.offsets[i] + (ms - nudgeBase.startMs) / 1000; });
+  $('tdNudgeOut').textContent = (ms > 0 ? '+' : '') + ms + ' ms';
+  const rec = tr.clips.map(c => c.rec).find(Boolean);
+  $('tdNudgeLearn').hidden = !rec || ms === 0;
+  if (rec) $('tdNudgeText').textContent = ms < 0 ? `Was late with ${rec.mic}?` : `Was early with ${rec.mic}?`;
+  timeline.invalidate();
+});
+$('tdNudge').addEventListener('change', () => {
+  if (!nudgeBase) return;
+  const before = nudgeBase.before;
+  nudgeBase = { before: app.snapshot(), offsets: dlgTrack.clips.map(c => c.offset), startMs: +$('tdNudge').value };
+  app.commit(before);
+});
+$('tdNudgeSave').addEventListener('click', () => {
+  const tr = dlgTrack;
+  const rec = tr.clips.map(c => c.rec).find(Boolean);
+  if (!rec) return;
+  const ms = +$('tdNudge').value;
+  // moved earlier by 40 ms => the earphones are 40 ms slower than we assumed
+  const next = Math.max(0, Math.round(rec.latencyMs - ms));
+  app.settings.latByDevice[rec.mic] = next;
+  saveSettings();
+  $('tdNudgeLearn').hidden = true;
+  toast(`Saved: ${rec.mic} now uses ${next} ms. Future takes will land there.`, false, 4500);
+});
 $('tdIncludeExport').addEventListener('change', (e) => { dlgTrack.includeInExport = e.target.checked; app.saveSoon(); });
 $('atEnabled').addEventListener('change', (e) => {
   const tr = dlgTrack;
   tr.autotune.enabled = e.target.checked;
-  if (e.target.checked && (needsTuning(tr) || !sameParams(tr.autotune.appliedParams, atParams(tr)))) {
-    applyAutotune(tr);
-  }
+  ensureTuned(tr);
   restartIfPlaying();
   updateAtStatus(); renderHeaders(); timeline.invalidate(); app.saveSoon();
 });
 for (const [id, key] of [['atKey', 'key'], ['atScale', 'scale'], ['atSpeed', 'speed'], ['atAmount', 'amount']]) {
   $(id).addEventListener('input', (e) => {
-    dlgTrack.autotune[key] = key === 'scale' ? e.target.value : +e.target.value;
+    const tr = dlgTrack;
+    tr.autotune[key] = key === 'scale' ? e.target.value : +e.target.value;
     syncTrackOutputs(); updateAtStatus(); app.saveSoon();
+    ensureTunedSoon(tr);
   });
 }
-$('atApply').addEventListener('click', () => applyAutotune(dlgTrack));
+$('atApply').addEventListener('click', () => { const tr = dlgTrack; $('trackDialog').close(); openTuneEditor(tr); });
 
 $('tdDelete').addEventListener('click', () => { const tr = dlgTrack; $('trackDialog').close(); deleteLayer(tr); });
 
@@ -946,95 +1031,42 @@ async function collectGarbage() {
   } catch { /* best effort */ }
 }
 
-// ---------- auto-tune worker ----------
-const atJobs = new Map();
-const atBusy = new Set();
-let atWorker = null;
-let atJobSeq = 0;
-function getWorker() {
-  if (!atWorker) {
-    atWorker = new Worker(new URL('./autotune-worker.js', import.meta.url), { type: 'module' });
-    atWorker.onmessage = (e) => {
-      const m = e.data;
-      for (const [trackId, job] of atJobs) {
-        if (job.id !== m.id) continue;
-        if (m.progress != null) {
-          job.onProgress && job.onProgress(m.progress);
-        } else if (m.error) {
-          atJobs.delete(trackId); job.reject(new Error(m.error));
-        } else if (m.done) {
-          atJobs.delete(trackId); job.resolve(m.channels);
-        }
-      }
-    };
-  }
-  return atWorker;
-}
+// ---------- auto-tune (note based) ----------
+const tuning = new Tuning({
+  getProject: () => app.project, engine: app.engine, db, uid,
+  onRendered: (tr) => {
+    renderHeaders(); timeline.invalidate(); updateAtStatus();
+    tuneEditor.onRendered(tr);
+    app.saveSoon();
+    if (tr.autotune.enabled) restartIfPlaying();
+  },
+});
 
-/** Raw audio ids on this layer that have no tuned version for the current settings. */
-function needsTuning(tr) {
-  const ids = [...new Set(tr.clips.map(c => c.audioId))];
-  return ids.filter(id => !(tr.autotune.processed || {})[id]);
-}
-
-/** A clip landed on a tuned layer: tune its audio too, quietly in the background. */
+/** Keep a layer's tuned sound current (background). */
 function ensureTuned(tr) {
-  const a = tr.autotune;
-  if (a && a.enabled && a.appliedParams && needsTuning(tr).length) applyAutotune(tr, { onlyMissing: true });
-}
-
-function runWorker(trackId, raw, params, onProgress) {
-  const channels = [];
-  for (let c = 0; c < raw.numberOfChannels; c++) channels.push(raw.getChannelData(c).slice());
-  const job = { id: ++atJobSeq, onProgress };
-  const done = new Promise((resolve, reject) => { job.resolve = resolve; job.reject = reject; });
-  atJobs.set(trackId, job);
-  getWorker().postMessage({ id: job.id, channels, sampleRate: raw.sampleRate, params }, channels.map(c => c.buffer));
-  return done;
-}
-
-async function applyAutotune(tr, { onlyMissing = false } = {}) {
-  if (atBusy.has(tr.id)) return;
-  const a = tr.autotune;
-  const params = onlyMissing && a.appliedParams ? a.appliedParams : atParams(tr);
-  const fresh = !onlyMissing && !sameParams(a.appliedParams, params);
-  const ids = fresh ? [...new Set(tr.clips.map(c => c.audioId))] : needsTuning(tr);
-  if (!ids.length) { a.enabled = true; a.appliedParams = params; afterEdit(); return; }
-  const project = app.project;
-  atBusy.add(tr.id);
+  if (!tr || !tr.autotune.enabled || !tr.clips.length || !tuning.stale(tr).length) return;
   updateAtStatus();
-  if (dlgTrack === tr) { $('atProgress').hidden = false; $('atProgress').value = 0; }
-  try {
-    const processed = fresh ? {} : { ...(a.processed || {}) };
-    for (let i = 0; i < ids.length; i++) {
-      const raw = app.engine.buffers.get(ids[i]);
-      if (!raw) continue;
-      const out = await runWorker(tr.id, raw, params, (pr) => {
-        if (dlgTrack === tr) { $('atProgress').hidden = false; $('atProgress').value = (i + pr) / ids.length; }
-      });
-      const audio = { id: uid(), sampleRate: raw.sampleRate, channels: out };
-      await db.saveAudio(audio);
-      app.engine.setBufferFromRecord(audio);
-      processed[ids[i]] = audio.id;
-    }
-    a.processed = processed;
-    a.appliedParams = params;
-    a.enabled = true;
-    if (app.project === project) {
-      await app.saveNow();
-      restartIfPlaying();
-    } else {
-      await db.saveProject(project);
-    }
-    if (!onlyMissing) toast(`${tr.name}: auto-tune done.`);
-  } catch (e) {
-    toast('Auto-tune failed: ' + e.message, true);
-  } finally {
-    atBusy.delete(tr.id);
-    if (dlgTrack === tr) { $('atProgress').hidden = true; $('atEnabled').checked = tr.autotune.enabled; updateAtStatus(); }
-    renderHeaders();
-    timeline.invalidate();
-  }
+  tuning.render(tr).catch(e => toast('Auto-tune failed: ' + e.message, true));
+}
+const tuneTimers = new Map();
+function ensureTunedSoon(tr, ms = 600) {
+  clearTimeout(tuneTimers.get(tr.id));
+  tuneTimers.set(tr.id, setTimeout(() => ensureTuned(tr), ms));
+}
+
+const tuneEditor = new TuneEditor({
+  app, tuning, timeline,
+  toast: (...a) => toast(...a),
+  commit: (before) => app.commit(before),
+  ensureTunedSoon: (tr) => ensureTunedSoon(tr, 450),
+  play: () => togglePlay(),
+  isPlaying: () => app.engine.isRunning,
+});
+function openTuneEditor(tr) {
+  if (!tr) { toast('Select a layer first.'); return; }
+  if (tr.isReference) { toast('Reference tracks can\u2019t be tuned.'); return; }
+  if (!tr.clips.length) { toast('Record something on this layer first.'); return; }
+  tuneEditor.open(tr);
 }
 
 // ---------- import reference ----------
@@ -1129,19 +1161,34 @@ $('btnNewProject').addEventListener('click', async () => {
 });
 
 // ---------- settings ----------
-$('btnSettings').addEventListener('click', async () => {
+async function openSettings(startSync = false) {
   const s = app.settings;
   $('monitor').checked = s.monitor;
   $('themeSel').value = s.theme || 'auto';
-  $('latAuto').checked = s.latAuto;
-  $('latMs').value = Math.round(s.latMs);
-  $('latMs').disabled = s.latAuto;
-  $('latEstimate').textContent = Math.round(app.engine.estimatedLatency() * 1000);
   $('calibResult').textContent = '';
+  renderSync();
   await fillDevices();
   await fillStorageInfo();
-  $('settingsDialog').showModal();
-});
+  if (!$('settingsDialog').open) $('settingsDialog').showModal();
+  if (startSync) $('btnSyncTest').scrollIntoView({ block: 'center' });
+}
+$('btnSettings').addEventListener('click', () => openSettings());
+
+function renderSync() {
+  const info = latencyInfo();
+  $('latDevice').textContent = info.key;
+  $('latValue').textContent = `${Math.round(info.sec * 1000)} ms ${info.measured ? '(measured)' : '(guess)'}`;
+  $('latMs').value = Math.round(info.sec * 1000);
+  const ul = $('latList');
+  ul.innerHTML = '';
+  for (const [k, v] of Object.entries(app.settings.latByDevice)) {
+    const li = document.createElement('li');
+    li.innerHTML = `<span></span><span>${Math.round(v)} ms</span><button type="button" class="btn sm" aria-label="Forget">Forget</button>`;
+    li.firstChild.textContent = k;
+    li.querySelector('button').addEventListener('click', () => { delete app.settings.latByDevice[k]; saveSettings(); renderSync(); });
+    ul.appendChild(li);
+  }
+}
 async function fillDevices() {
   const sel = $('inputDevice');
   try {
@@ -1174,23 +1221,55 @@ $('themeSel').addEventListener('change', (e) => { app.settings.theme = e.target.
 $('lcdTempoBtn').addEventListener('click', () => { $('bpm').focus(); $('bpm').select(); });
 $('lcdSigBtn').addEventListener('click', () => { $('timeSig').focus(); if ($('timeSig').showPicker) try { $('timeSig').showPicker(); } catch { /* */ } });
 $('monitor').addEventListener('change', (e) => { app.settings.monitor = e.target.checked; app.engine.setMonitor(e.target.checked); saveSettings(); });
-$('latAuto').addEventListener('change', (e) => { app.settings.latAuto = e.target.checked; $('latMs').disabled = e.target.checked; saveSettings(); });
-$('latMs').addEventListener('change', (e) => { app.settings.latMs = Math.max(0, +e.target.value || 0); saveSettings(); });
+$('latMs').addEventListener('change', (e) => {
+  app.settings.latByDevice[latencyInfo().key] = Math.max(0, Math.min(1000, +e.target.value || 0));
+  saveSettings(); renderSync();
+});
+$('btnLatReset').addEventListener('click', () => {
+  delete app.settings.latByDevice[latencyInfo().key];
+  app.settings.latAuto = true;
+  saveSettings(); renderSync();
+});
+$('btnSyncTest').addEventListener('click', async () => {
+  const out = $('calibResult'), btn = $('btnSyncTest');
+  btn.disabled = true;
+  try {
+    await openMic();
+    rememberMic();
+    const wasMonitor = app.engine.monitorEnabled;
+    app.engine.setMonitor(false);
+    out.textContent = 'Get ready…';
+    const sec = await app.engine.calibrateTapAlong({
+      onBeat: (i, lead, total) => {
+        out.textContent = i < lead ? `Count-in ${lead - i}…` : `Clap! ${i - lead + 1} / ${total - lead}`;
+      },
+    });
+    app.engine.setMonitor(wasMonitor);
+    const key = latencyInfo().key;
+    app.settings.latByDevice[key] = Math.round(sec * 1000);
+    saveSettings(); renderSync();
+    out.textContent = `Done: ${Math.round(sec * 1000)} ms for ${key}. New takes with these earphones will land on the beat.`;
+  } catch (e) {
+    out.textContent = e.message;
+  } finally {
+    if (!app.recording) app.engine.disableMic();
+    btn.disabled = false;
+  }
+});
 $('btnCalibrate').addEventListener('click', async () => {
   const out = $('calibResult');
   out.textContent = 'Listening… stay quiet.';
   $('btnCalibrate').disabled = true;
   try {
     await openMic();
+    rememberMic();
     const wasMonitor = app.engine.monitorEnabled;
     app.engine.setMonitor(false);
     const sec = await app.engine.calibrateLatency();
     app.engine.setMonitor(wasMonitor);
-    app.settings.latAuto = false;
-    app.settings.latMs = Math.round(sec * 1000);
-    saveSettings();
-    $('latAuto').checked = false; $('latMs').disabled = false; $('latMs').value = app.settings.latMs;
-    out.textContent = `Measured ${app.settings.latMs} ms. New takes get moved by that much. Headphones back in.`;
+    app.settings.latByDevice[latencyInfo().key] = Math.round(sec * 1000);
+    saveSettings(); renderSync();
+    out.textContent = `Measured ${Math.round(sec * 1000)} ms through the speaker.`;
   } catch (e) {
     out.textContent = e.message;
   } finally {
@@ -1243,3 +1322,4 @@ app.render = renderAll;
 window.__app = app;
 window.__tl = timeline;
 window.__loadProject = loadProject;
+window.__te = tuneEditor;
